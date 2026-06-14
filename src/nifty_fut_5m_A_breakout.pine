@@ -131,8 +131,9 @@ inAlertTag = input.string("NIFTY FUT", "Alert symbol label", group = GRP_ALERTS,
 // pure where possible, per CLAUDE.md §5), then the session-independent series.
 // =============================================================================
 
-// f_barCount: bars elapsed since the session opened. Encapsulated `var` state, one
-// instance per call site. Resets to 1 on the session's first bar.
+// f_barCount: bars elapsed since the caller-supplied reset (isNew). Encapsulated
+// `var` state, one instance per call site. Resets to 1 on the reset bar, then
+// increments while isIn is true.
 f_barCount(bool isNew, bool isIn) =>
     var int n = 0
     if isNew
@@ -141,10 +142,10 @@ f_barCount(bool isNew, bool isIn) =>
         n := n + 1
     n
 
-// f_sessionAgg: session-anchored, volume-FREE running mean of `src` (a VWAP proxy
-// that survives volume-less feeds) plus the running volume sum used to test whether
-// the feed's volume is real. Encapsulated `var` state; resets each session.
-// Returns [sessionMean, volumeSum]; mean is div-by-zero guarded.
+// f_sessionAgg: volume-FREE running mean of `src` since the caller-supplied reset
+// (isNew) — a VWAP proxy that survives volume-less feeds — plus the running volume
+// sum used to test whether the feed's volume is real. Encapsulated `var` state;
+// resets on isNew, accumulates while isIn. Returns [mean, volumeSum]; div-by-zero guarded.
 f_sessionAgg(float src, float vol, bool isNew, bool isIn) =>
     var float s    = na
     var int   c    = 0
@@ -180,33 +181,37 @@ vwapRaw = ta.vwap(inBiasSrc)
 
 // =============================================================================
 // === 3. SESSION & FILTERS ===
-// Session-window detection, session-anchored aggregates (volume-free SessionAvg +
-// volume reliability), and the resolved bias reference. No trade decisions here —
-// just the booleans/series the gates will consume.
+// Trade-eligibility windows, the trading-DAY anchor (shared by VWAP + the SessionAvg
+// fallback), day-anchored aggregates + volume reliability, and the resolved bias
+// reference. No trade decisions here — just the booleans/series the gates consume.
 // =============================================================================
 
-// --- session-window booleans (na outside the window) ---
-inSession     = not na(time(timeframe.period, inSessTrade, inTz))
-inEntryWindow = not na(time(timeframe.period, inSessEntry, inTz))
-inFlatWindow  = not na(time(timeframe.period, inSessFlat,  inTz))
-// Track prior-bar session state in a var bool (defaults to false on the first
-// bar) so newSession never depends on a na history value. Read BEFORE updating.
-var bool wasInSession = false
-newSession    = inSession and not wasInSession   // first bar of a new trading session
-wasInSession := inSession
+// --- trade-eligibility session windows (na outside the window) ---
+inSession     = not na(time(timeframe.period, inSessTrade, inTz))   // 09:20-15:10 entry-eligible window
+inEntryWindow = not na(time(timeframe.period, inSessEntry, inTz))   // 09:20-14:45 new-entry window
+inFlatWindow  = not na(time(timeframe.period, inSessFlat,  inTz))   // 15:15-15:30 force-flat window
 
-// --- bars-since-session-open (for the opening-noise skip) ---
-barsInSession  = f_barCount(newSession, inSession)
-// afterOpenNoise: true once we are past the first inSkipOpenBars bars of the session.
-afterOpenNoise = inSession and barsInSession > inSkipOpenBars
+// --- trading-DAY anchor: true on the first intraday bar of each new day, i.e. the
+//     first bar at/after the session open (~09:15 IST). This MATCHES ta.vwap's own
+//     per-day reset, so VWAP and the SessionAvg fallback share ONE anchor. ---
+isNewDay = timeframe.change("1D")
 
-// --- session-anchored aggregates (volume-free mean + volume sum) ---
-[sessAvg, cumVol] = f_sessionAgg(inBiasSrc, volume, newSession, inSession)
-// is the feed's volume real this session? (guards the VWAP path)
-volReliable = inSession and not na(cumVol) and cumVol > 0
+// --- bars since the trading day opened. skipOpenBars counts from the 09:15 open
+//     (STRATEGY_SPEC: "skips 09:15-09:25"); accumulate every bar, reset on isNewDay ---
+barsInDay      = f_barCount(isNewDay, true)
+afterOpenNoise = inSession and barsInDay > inSkipOpenBars
 
-// --- resolved bias reference (true VWAP, with auto-fallback to SessionAvg) ---
+// --- day-anchored aggregates (full day, exactly like VWAP): volume-free mean +
+//     volume sum. On a regular-session feed every bar belongs to the day, so
+//     accumulating every bar between isNewDay resets mirrors ta.vwap. ---
+[sessAvg, cumVol] = f_sessionAgg(inBiasSrc, volume, isNewDay, true)
+// feed has real volume this day? -> selects true VWAP vs the SessionAvg fallback
+volReliable = not na(cumVol) and cumVol > 0
+
+// --- resolved bias reference (true VWAP when volume reliable, else SessionAvg) ---
 biasRefPrice = f_resolveBiasRef(inBiasRef, vwapRaw, sessAvg, volReliable)
+// active-source code for verification: 1 = VWAP, 0 = SessionAvg, -1 = EMA-only
+activeSrcCode = inBiasRef == "EMA-only" ? -1.0 : inBiasRef == "SessionAvg" ? 0.0 : (volReliable and not na(vwapRaw) ? 1.0 : 0.0)
 
 // --- timeframe sanity warning (managed label; stale deleted each last bar) ---
 tfMismatch = inWarnTf and timeframe.in_seconds() != inExpectedTfMin * 60
@@ -239,18 +244,24 @@ if barstate.islast
 // === 7. PLOTTING ===
 // Context plots now; BUY/EXIT labels + stop/target lines arrive in Phase 3.
 // =============================================================================
-plot(inShowEmas    ? emaFast      : na, "EMA fast", color = color.new(color.aqua,   0), linewidth = 1)
-plot(inShowEmas    ? emaSlow      : na, "EMA slow", color = color.new(color.orange, 0), linewidth = 1)
-plot(inShowBiasRef ? biasRefPrice : na, "Bias ref", color = color.new(color.fuchsia,0), linewidth = 2)
+// EMAs are not session-anchored -> plot continuously.
+plot(inShowEmas ? emaFast : na, "EMA fast", color = color.new(color.aqua,   0), linewidth = 1)
+plot(inShowEmas ? emaSlow : na, "EMA slow", color = color.new(color.orange, 0), linewidth = 1)
+// Bias ref IS day-anchored -> plot na on the first bar of each new day so no
+// vertical connector is drawn across the anchor reset. Line resumes next bar.
+plot((inShowBiasRef and not isNewDay) ? biasRefPrice : na, "Bias ref", color = color.new(color.fuchsia, 0), linewidth = 2)
 
 bgcolor(inShowSessionBg and inSession ? color.new(color.blue, 92) : na, title = "Session shade")
 
 // --- debug series -> Data Window only (no chart clutter), gated by toggle ---
-plot(inShowDebug ? atrVal                      : na, "dbg ATR",        display = display.data_window)
-plot(inShowDebug ? sessAvg                     : na, "dbg SessAvg",    display = display.data_window)
+plot(inShowDebug ? biasRefPrice                : na, "dbg biasRef",    display = display.data_window)
+plot(inShowDebug ? activeSrcCode               : na, "dbg activeSrc 1=VWAP 0=SessAvg -1=EMA", display = display.data_window)
 plot(inShowDebug ? vwapRaw                     : na, "dbg vwapRaw",    display = display.data_window)
-plot(inShowDebug ? barsInSession               : na, "dbg barsInSess", display = display.data_window)
+plot(inShowDebug ? sessAvg                     : na, "dbg SessAvg",    display = display.data_window)
 plot(inShowDebug ? (volReliable   ? 1 : 0)     : na, "dbg volReliable",display = display.data_window)
+plot(inShowDebug ? (isNewDay      ? 1 : 0)     : na, "dbg isNewDay",   display = display.data_window)
+plot(inShowDebug ? atrVal                      : na, "dbg ATR",        display = display.data_window)
+plot(inShowDebug ? barsInDay                   : na, "dbg barsInDay",  display = display.data_window)
 plot(inShowDebug ? (inSession     ? 1 : 0)     : na, "dbg inSession",  display = display.data_window)
 plot(inShowDebug ? (inEntryWindow ? 1 : 0)     : na, "dbg inEntryWin", display = display.data_window)
 plot(inShowDebug ? (inFlatWindow  ? 1 : 0)     : na, "dbg inFlatWin",  display = display.data_window)
@@ -261,7 +272,8 @@ plot(inShowDebug ? (afterOpenNoise? 1 : 0)     : na, "dbg afterOpen",  display =
 var table dbgT = na
 if inShowDebug and barstate.islast
     if na(dbgT)
-        dbgT := table.new(position.top_right, 2, 13, border_width = 1)
+        dbgT := table.new(position.top_right, 2, 15, border_width = 1)
+    activeSrcStr = inBiasRef == "EMA-only" ? "EMA-only" : inBiasRef == "SessionAvg" ? "SessionAvg" : (volReliable ? "VWAP" : "SessionAvg (fallback)")
     table.cell(dbgT, 0, 0,  "PARAM",        bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(dbgT, 1, 0,  "VALUE",        bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(dbgT, 0, 1,  "Trigger",      text_size = size.small)
@@ -288,6 +300,10 @@ if inShowDebug and barstate.islast
     table.cell(dbgT, 1, 11, inBiasRef,      text_size = size.small)
     table.cell(dbgT, 0, 12, "Alert tag",    text_size = size.small)
     table.cell(dbgT, 1, 12, inAlertTag,     text_size = size.small)
+    table.cell(dbgT, 0, 13, "Active src",   bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 1, 13, activeSrcStr,   bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 0, 14, "Vol reliable", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 1, 14, str.tostring(volReliable), bgcolor = color.new(color.teal, 60), text_size = size.small)
 else if not inShowDebug and not na(dbgT)
     table.delete(dbgT)
     dbgT := na
