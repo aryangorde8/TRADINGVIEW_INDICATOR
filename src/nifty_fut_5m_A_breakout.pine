@@ -189,10 +189,11 @@ vwapRaw = ta.vwap(inBiasSrc)
 inSession     = not na(time(timeframe.period, inSessTrade, inTz))
 inEntryWindow = not na(time(timeframe.period, inSessEntry, inTz))
 inFlatWindow  = not na(time(timeframe.period, inSessFlat,  inTz))
-// explicit prev-bar handling: inSession[1] is na on the first bar (no history),
-// which would poison the boolean under v6 strictness -> default it to false.
-wasInSession  = na(inSession[1]) ? false : inSession[1]
+// Track prior-bar session state in a var bool (defaults to false on the first
+// bar) so newSession never depends on a na history value. Read BEFORE updating.
+var bool wasInSession = false
 newSession    = inSession and not wasInSession   // first bar of a new trading session
+wasInSession := inSession
 
 // --- bars-since-session-open (for the opening-noise skip) ---
 barsInSession  = f_barCount(newSession, inSession)
