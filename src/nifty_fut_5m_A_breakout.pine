@@ -225,9 +225,59 @@ if barstate.islast
 
 // =============================================================================
 // === 4. SIGNAL LOGIC (GATES) ===
-// Phase 2: GATE 1 (bias) / GATE 2 (trigger: breakout|pullback) / GATE 3 (context).
-// All evaluated on CONFIRMED bars only -> non-repainting. No code yet.
+// Breakout family. Boolean signals only — NO orders here (Phase 3 wires risk).
+// Every input to every gate is a COMPLETED value at bar close; historical bars
+// are immutable, so none of these booleans can repaint. (On the live forming bar
+// they may flicker intrabar and settle at close — entries in Phase 3 act on the
+// close via process_orders_on_close, so execution uses the settled value.)
 // =============================================================================
+
+// f_bias: GATE 1. PURE. Directional bias. When `ref` is na (EMA-only mode) the
+// price-vs-reference term is dropped and the EMA cross decides alone.
+f_bias(float src, float ref, float emaF, float emaS) =>
+    hasRef = not na(ref)
+    lng = hasRef ? (src > ref and emaF > emaS) : (emaF > emaS)
+    sht = hasRef ? (src < ref and emaF < emaS) : (emaF < emaS)
+    [lng, sht]
+
+// f_breakout: GATE 2 (breakout). PURE. Fires when a confirmed close breaks the
+// prior N-bar extreme. Caller passes pHigh/pLow ALREADY offset by [1] so the
+// still-forming bar is excluded; na-guarded for the first N bars.
+f_breakout(float src, float pHigh, float pLow) =>
+    [not na(pHigh) and src > pHigh, not na(pLow) and src < pLow]
+
+// --- GATE 1: bias ---
+// Non-repaint: close is final at bar close; emaFast/emaSlow are EMAs of closed
+// prices; biasRefPrice is ta.vwap/SessionAvg of completed bars. On a closed bar all
+// four are fixed -> the bias decision is immutable.
+[longBias, shortBias] = f_bias(close, biasRefPrice, emaFast, emaSlow)
+
+// --- GATE 2: trigger (breakout) ---
+// priorHigh/priorLow are the highest-high / lowest-low over the N bars ENDING ONE
+// BAR AGO (offset [1] excludes the current forming bar). Non-repaint: they depend
+// only on bars strictly before now, and close is final at bar close.
+priorHigh = ta.highest(high, inBreakoutN)[1]
+priorLow  = ta.lowest(low,  inBreakoutN)[1]
+[breakoutLong, breakoutShort] = f_breakout(close, priorHigh, priorLow)
+
+// Active trigger for THIS variant (A = breakout). Pullback is Variant B (Phase 4),
+// so selecting "pullback" here intentionally yields no trigger in this file.
+isBreakoutMode = inTriggerMode == "breakout"
+trigLong  = isBreakoutMode and breakoutLong
+trigShort = isBreakoutMode and breakoutShort
+
+// --- GATE 3: context block (any true => no entry) ---
+// Non-repaint: session/entry windows come from time() (fixed per bar), afterOpenNoise
+// from a monotonic bar counter, ATR from completed bars, position state is known.
+atrOk      = not na(atrVal)
+atrTooLow  = atrOk and atrVal < inMinAtr                       // inMinAtr=0 disables
+atrTooHigh = atrOk and inMaxAtr > 0 and atrVal > inMaxAtr      // inMaxAtr=0 disables
+posOpen    = strategy.position_size != 0
+gate3Block = (not inSession) or (not inEntryWindow) or (not afterOpenNoise) or atrTooLow or atrTooHigh or posOpen
+
+// --- combined entry signals (computed only; NO orders until Phase 3) ---
+sigLong  = longBias  and trigLong  and not gate3Block
+sigShort = shortBias and trigShort and not gate3Block
 
 // =============================================================================
 // === 5. RISK & EXITS ===
@@ -266,6 +316,16 @@ plot(inShowDebug ? (inSession     ? 1 : 0)     : na, "dbg inSession",  display =
 plot(inShowDebug ? (inEntryWindow ? 1 : 0)     : na, "dbg inEntryWin", display = display.data_window)
 plot(inShowDebug ? (inFlatWindow  ? 1 : 0)     : na, "dbg inFlatWin",  display = display.data_window)
 plot(inShowDebug ? (afterOpenNoise? 1 : 0)     : na, "dbg afterOpen",  display = display.data_window)
+// --- GATE debug (Phase 2): eyeball which bars fire ---
+plot(inShowDebug ? (longBias      ? 1 : 0)     : na, "dbg longBias",      display = display.data_window)
+plot(inShowDebug ? (shortBias     ? 1 : 0)     : na, "dbg shortBias",     display = display.data_window)
+plot(inShowDebug ? (breakoutLong  ? 1 : 0)     : na, "dbg breakoutLong",  display = display.data_window)
+plot(inShowDebug ? (breakoutShort ? 1 : 0)     : na, "dbg breakoutShort", display = display.data_window)
+plot(inShowDebug ? (gate3Block    ? 1 : 0)     : na, "dbg gate3Block",    display = display.data_window)
+plot(inShowDebug ? (sigLong       ? 1 : 0)     : na, "dbg sigLong",       display = display.data_window)
+plot(inShowDebug ? (sigShort      ? 1 : 0)     : na, "dbg sigShort",      display = display.data_window)
+plot(inShowDebug ? priorHigh                   : na, "dbg priorHigh",     display = display.data_window)
+plot(inShowDebug ? priorLow                    : na, "dbg priorLow",      display = display.data_window)
 
 // --- parameter echo panel (verifies "zero magic numbers"; references all
 //     not-yet-wired inputs so the scaffold has no unused-variable warnings) ---
