@@ -276,26 +276,138 @@ atrOk      = not na(atrVal)
 atrTooLow  = atrOk and atrVal < inMinAtr                       // inMinAtr=0 disables
 atrTooHigh = atrOk and inMaxAtr > 0 and atrVal > inMaxAtr      // inMaxAtr=0 disables
 posOpen    = strategy.position_size != 0
-gate3Block = (not inSession) or (not inEntryWindow) or (not afterOpenNoise) or atrTooLow or atrTooHigh or posOpen
+// Block entries until sizing indicators are warm, else stop/R/target would be na.
+dataReady  = not na(atrVal) and not na(emaFast) and not na(emaSlow)
+// Split GATE 3 so the flip-exit can reuse the context filters WITHOUT posOpen.
+gate3BlockNoPos = (not dataReady) or (not inSession) or (not inEntryWindow) or (not afterOpenNoise) or atrTooLow or atrTooHigh
+gate3Block      = gate3BlockNoPos or posOpen
 
-// --- combined entry signals (computed only; NO orders until Phase 3) ---
+// --- combined entry signals (posOpen-gated -> only fire when flat) ---
 sigLong  = longBias  and trigLong  and not gate3Block
 sigShort = shortBias and trigShort and not gate3Block
 
+// --- raw opposite signals for the flip-exit: a VALID opposite entry IGNORING the
+//     open position (all gates except posOpen). Same completed-value basis as the
+//     entry signals -> non-repainting. Consumed by the flip logic in Section 5. ---
+oppLongRaw  = longBias  and trigLong  and not gate3BlockNoPos
+oppShortRaw = shortBias and trigShort and not gate3BlockNoPos
+
 // =============================================================================
 // === 5. RISK & EXITS ===
-// Phase 3: ATR/structural stop, R, rrTarget, breakeven+trail at +R, time stop,
-// opposite-flip exit. No code yet.
+// State for the single open position (pyramiding=0). Geometry is fixed on the entry
+// SIGNAL bar — whose close is the fill under process_orders_on_close — then the
+// trail ratchets using completed-bar values only. NO order calls here (Section 6).
 // =============================================================================
+var int    posDir          = 0      // 1 long / -1 short / 0 flat
+var float  entryPx         = na     // intended entry = signal-bar close
+var float  initStop        = na     // initial protective stop
+var float  rVal            = na     // R = |entry - initStop|
+var float  targetPx        = na     // fixed rrTarget*R take-profit (limit leg of OCO)
+var float  trailStop       = na     // current (ratcheting) stop level
+var bool   trailArmed      = false  // has price reached +inArmTrailR*R ?
+var int    entryBarIdx     = na     // bar_index of the entry (anchors the stop line)
+var string pendingReason   = na     // set when WE close (time/flip); else inferred
+var float  closingTargetPx = na     // snapshot of target while in position (for reason)
+var float  closingTrailStop = na    // snapshot of stop  while in position (for reason)
+
+enterLong  = sigLong                // sigLong already requires flat (posOpen in GATE 3)
+enterShort = sigShort
+
+// --- fix geometry on the entry signal bar ---
+// Non-repaint: close/low/high are final at bar close; atrVal is from completed bars.
+// "WIDER of (atrMult*ATR, trigger-bar extreme)" => lower stop for long / higher for short.
+if enterLong
+    posDir        := 1
+    entryPx       := close
+    atrStopL       = close - inAtrMult * atrVal
+    initStop      := inUseStructStop ? math.min(atrStopL, low) : atrStopL
+    rVal          := entryPx - initStop
+    targetPx      := entryPx + inRrTarget * rVal
+    trailStop     := initStop
+    trailArmed    := false
+    entryBarIdx   := bar_index
+    pendingReason := na
+if enterShort
+    posDir        := -1
+    entryPx       := close
+    atrStopS       = close + inAtrMult * atrVal
+    initStop      := inUseStructStop ? math.max(atrStopS, high) : atrStopS
+    rVal          := initStop - entryPx
+    targetPx      := entryPx - inRrTarget * rVal
+    trailStop     := initStop
+    trailArmed    := false
+    entryBarIdx   := bar_index
+    pendingReason := na
+
+inPos = strategy.position_size != 0
+
+// --- trail: arm at +armR*R -> breakeven, then ratchet by atrMult*ATR ---
+// Non-repaint: uses THIS bar's completed high/low/close; the new stop is applied via
+// strategy.exit and only checked on SUBSEQUENT bars -> no same-bar lookahead. R>0
+// guards a degenerate stop.
+if inPos and posDir == 1 and rVal > 0
+    if not trailArmed and high >= entryPx + inArmTrailR * rVal
+        trailArmed := true
+        trailStop  := math.max(trailStop, entryPx)                     // -> breakeven
+    if trailArmed
+        trailStop  := math.max(trailStop, close - inAtrMult * atrVal)  // ratchet up only
+if inPos and posDir == -1 and rVal > 0
+    if not trailArmed and low <= entryPx - inArmTrailR * rVal
+        trailArmed := true
+        trailStop  := math.min(trailStop, entryPx)                     // -> breakeven
+    if trailArmed
+        trailStop  := math.min(trailStop, close + inAtrMult * atrVal)  // ratchet down only
+
+// snapshot live levels so the exit-reason classifier survives a same-bar re-entry
+if inPos
+    closingTargetPx  := targetPx
+    closingTrailStop := trailStop
+
+// --- exits we trigger ourselves (the OCO bracket handles stop/target) ---
+// Time stop: force-flat in the flat window (15:15). Flip: a VALID opposite entry
+// (all gates except posOpen) appears -> close now; re-entry (if still valid) is a
+// LATER bar via the normal path. Non-repaint: inFlatWindow from time(); oppRaw from
+// completed values.
+timeExit = inPos and inFlatWindow
+flipExit = inPos and ((posDir == 1 and oppShortRaw) or (posDir == -1 and oppLongRaw))
 
 // =============================================================================
 // === 6. ORDERS ===
-// Phase 3: strategy.entry / strategy.exit / strategy.close wiring. No code yet.
+// Entry: long = CE bias, short = PE bias. Exit: ONE OCO bracket (stop+limit linked)
+// per position via strategy.exit; strategy.close_all for time-stop and flip.
+// Non-repaint: orders are submitted on confirmed bars and, with
+// process_orders_on_close=true, market entries fill at THIS bar's close (the settled
+// signal value) — the signal bar IS the fill bar. Same-bar stop+target ambiguity:
+// TV's tester fills the STOP FIRST (conservative); no bar-magnifier hacks added.
 // =============================================================================
+if enterLong
+    strategy.entry("Long", strategy.long)      // CE bias (profits when spot rises)
+if enterShort
+    strategy.entry("Short", strategy.short)    // PE bias (profits when spot falls)
+
+// OCO bracket: maintained every bar we hold (or are opening) a position; repeated
+// calls with the same id UPDATE the stop as the trail ratchets. The limit (target)
+// is fixed at rrTarget*R. Non-repaint: levels are completed-bar values; orders fill
+// on later bars (or this bar's close for the close_all path).
+bracketActive = inPos or enterLong or enterShort
+if bracketActive and posDir == 1
+    strategy.exit("Bracket", from_entry = "Long",  stop = trailStop, limit = targetPx)
+else if bracketActive and posDir == -1
+    strategy.exit("Bracket", from_entry = "Short", stop = trailStop, limit = targetPx)
+
+// Time-stop / flip: market close at this bar's close (process_orders_on_close).
+// pendingReason tags the close so rendering can show the correct reason.
+if timeExit
+    pendingReason := "time"
+    strategy.close_all(comment = "time stop")
+else if flipExit
+    pendingReason := "flip"
+    strategy.close_all(comment = "flip")
 
 // =============================================================================
 // === 7. PLOTTING ===
-// Context plots now; BUY/EXIT labels + stop/target lines arrive in Phase 3.
+// Context plots, debug markers/series, BUY/EXIT labels off ACTUAL fills, and live
+// stop/target lines (deleted when flat).
 // =============================================================================
 // EMAs are not session-anchored -> plot continuously.
 plot(inShowEmas ? emaFast : na, "EMA fast", color = color.new(color.aqua,   0), linewidth = 1)
@@ -389,8 +501,88 @@ else if not inShowDebug and not na(dbgT)
     table.delete(dbgT)
     dbgT := na
 
+// --- trade rendering: labels driven off ACTUAL fills; live stop/target lines ---
+// Non-repaint: opentrades/closedtrades reflect SETTLED fills reported by the engine;
+// labels anchor to the real fill bar/price. (Under process_orders_on_close the fill
+// is at the signal bar's close; the count transition is seen on the next bar, so the
+// label is anchored back to entry_bar_index / exit_bar_index = the true fill bar.)
+newTradeOpened = strategy.opentrades   > nz(strategy.opentrades[1])
+newTradeClosed = strategy.closedtrades > nz(strategy.closedtrades[1])
+
+// closed-trade facts + exit-reason (shared by label and alert); computed once.
+bool   exitLong   = false
+float  exitPx     = na
+int    exitBarIdx = na
+string exitReason = na
+if newTradeClosed
+    xi          = strategy.closedtrades - 1
+    exitBarIdx := strategy.closedtrades.exit_bar_index(xi)
+    exitPx     := strategy.closedtrades.exit_price(xi)
+    exitLong   := strategy.closedtrades.size(xi) > 0
+    // classify by price first (so a bracket fill is labelled even if a time/flip was
+    // also pending that bar); fall back to our tracked reason for a mid-range close.
+    fallbackReason = na(pendingReason) ? "flat" : pendingReason   // mid-range market close
+    exitReason := exitLong ? (exitPx >= closingTargetPx ? "target" : (exitPx <= closingTrailStop ? "stop" : fallbackReason)) : (exitPx <= closingTargetPx ? "target" : (exitPx >= closingTrailStop ? "stop" : fallbackReason))
+    pendingReason := na   // consumed
+
+// BUY CE / BUY PE at the entry fill
+if newTradeOpened
+    oi    = strategy.opentrades - 1
+    obar  = strategy.opentrades.entry_bar_index(oi)
+    opx   = strategy.opentrades.entry_price(oi)
+    oLong = strategy.opentrades.size(oi) > 0
+    label.new(obar, opx, oLong ? "BUY CE" : "BUY PE", xloc = xloc.bar_index,
+         style     = oLong ? label.style_label_up : label.style_label_down,
+         color     = oLong ? color.new(color.green, 0) : color.new(color.red, 0),
+         textcolor = color.white, size = size.small,
+         tooltip   = (oLong ? "BUY CE @ " : "BUY PE @ ") + str.tostring(opx, format.mintick))
+
+// EXIT CE / EXIT PE at the exit fill, reason in the tooltip
+if newTradeClosed
+    label.new(exitBarIdx, exitPx, exitLong ? "EXIT CE" : "EXIT PE", xloc = xloc.bar_index,
+         style     = exitLong ? label.style_label_down : label.style_label_up,
+         color     = color.new(color.orange, 0), textcolor = color.black, size = size.small,
+         tooltip   = (exitLong ? "EXIT CE (" : "EXIT PE (") + exitReason + ") @ " + str.tostring(exitPx, format.mintick))
+
+// live stop & target lines (single pair; recreated each in-position bar, deleted flat)
+var line stopLn = na
+var line tgtLn  = na
+if inPos
+    line.delete(stopLn)
+    line.delete(tgtLn)
+    stopLn := line.new(entryBarIdx, trailStop, bar_index, trailStop, xloc = xloc.bar_index, color = color.new(color.red,   0), style = line.style_dashed, width = 1)
+    tgtLn  := line.new(entryBarIdx, targetPx,  bar_index, targetPx,  xloc = xloc.bar_index, color = color.new(color.green, 0), style = line.style_dashed, width = 1)
+else
+    line.delete(stopLn)
+    line.delete(tgtLn)
+    stopLn := na
+    tgtLn  := na
+
 // =============================================================================
 // === 8. ALERTS ===
-// Phase 3: alertcondition()/alert() for BUY CE / BUY PE / EXIT CE / EXIT PE,
-// messages tagged with inAlertTag + price + reason. No code yet.
+// Both mechanisms for all four events:
+//  - alertcondition(): static messages (must be const) for manual UI alerts; use
+//    {{ }} placeholders since they cannot read inputs.
+//  - alert(): dynamic runtime messages tagged with inAlertTag + price + reason.
+// Entry alerts fire on the signal bar (= the fill bar under process_orders_on_close).
+// Exit alerts fire when the engine reports the closed trade — the bar AFTER the fill —
+// because the exit reason (stop/target/time/flip) is only known once filled; the
+// message still carries the true fill price + reason. alert.freq_once_per_bar_close
+// keeps every alert on a CONFIRMED bar -> non-repaint.
 // =============================================================================
+exitCe = newTradeClosed and exitLong          // a long (CE) trade closed
+exitPe = newTradeClosed and not exitLong      // a short (PE) trade closed
+
+alertcondition(enterLong,  title = "BUY CE",  message = "BUY CE (long) on {{ticker}} @ {{close}}")
+alertcondition(enterShort, title = "BUY PE",  message = "BUY PE (short) on {{ticker}} @ {{close}}")
+alertcondition(exitCe,     title = "EXIT CE", message = "EXIT CE (long close) on {{ticker}} @ {{close}}")
+alertcondition(exitPe,     title = "EXIT PE", message = "EXIT PE (short close) on {{ticker}} @ {{close}}")
+
+if enterLong
+    alert(inAlertTag + " | BUY CE @ " + str.tostring(close, format.mintick) + " | entry", alert.freq_once_per_bar_close)
+if enterShort
+    alert(inAlertTag + " | BUY PE @ " + str.tostring(close, format.mintick) + " | entry", alert.freq_once_per_bar_close)
+if exitCe
+    alert(inAlertTag + " | EXIT CE @ " + str.tostring(exitPx, format.mintick) + " | " + exitReason, alert.freq_once_per_bar_close)
+if exitPe
+    alert(inAlertTag + " | EXIT PE @ " + str.tostring(exitPx, format.mintick) + " | " + exitReason, alert.freq_once_per_bar_close)
