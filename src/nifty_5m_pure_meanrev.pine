@@ -1,0 +1,861 @@
+//@version=6
+// =============================================================================
+// NIFTY FUT 5m — PURE Mean-Reversion (fade the extension, NO trend filter)
+// -----------------------------------------------------------------------------
+// PURPOSE  : Directional intraday signals for buying NIFTY index OPTIONS (CE=long,
+//            PE=short). Runs on the NIFTY *futures* underlying, NOT option premium.
+//            Strategy-Tester results are a directional UPPER BOUND on real CE/PE P&L.
+// THESIS   : The OPPOSITE bet to the 4 prior (all trend-ALIGNED) entries that failed.
+//            Fade extensions away from the mean REGARDLESS of trend: buy the flush
+//            (price stretched far BELOW VWAP + genuinely oversold), sell the spike.
+//            Fires in chop AND against trends. NO win-rate target; judge on expectancy
+//            (R/trade), profit factor and the MFE tail. Reversion targets are CLOSE.
+// TAIL CTRL: pure reversion's killer is a TRENDING day, so two hard guards: (1) a -1R
+//            structural stop beyond the extreme (keep extending => you're wrong, out
+//            fast); (2) an ADX REGIME GUARD that REFUSES to fade when ADX > inMaxAdx.
+// HARNESS  : Reuses the clean instrumented harness (R-based stop accounting, exit-reason
+//            counter, MFE/MAE shadow-tracker, funnel counter, BUY/EXIT labels, alerts,
+//            optional partial+runner). NO bias/trend gate (the key difference). NO
+//            confluence-gate stacking (overfit trap). EMAs are plotted for context only.
+// INSTRUMENT: Designed for NIFTY futures (e.g. NSE:NIFTY1! continuous front-month,
+//            or the active monthly contract for clean single-period tests). Futures
+//            carry real volume, so ta.vwap is valid as the PRIMARY bias reference;
+//            it degrades gracefully to SessionAvg on volume-less feeds.
+// ROLLOVER : On a continuous contract (NIFTY1!) the monthly rollover can produce
+//            one anomalous bar/gap. This is FLAGGED, not handled — do not add
+//            rollover logic; just be aware one print per month may be distorted.
+// =============================================================================
+
+// strategy() must be the FIRST statement, so it cannot reference input.* declared
+// below. The backtest-cost values here are therefore literals (framework config,
+// not strategy-logic tunables) and are documented inline. All trading-LOGIC
+// parameters are exposed as input.* in Section 1.
+strategy(
+     title                   = "NIFTY FUT 5m — Pure Mean-Reversion",
+     shorttitle              = "NF5m-MR",
+     overlay                 = true,
+     pyramiding              = 0,                              // one position at a time (0 is the default; it allows the FIRST entry, only blocks adding to it)
+     calc_on_every_tick      = false,                         // evaluate on bar data, not ticks
+     process_orders_on_close = true,                          // fills modelled at bar close (anti-repaint friendly)
+     initial_capital         = 10000000,                      // INR 1 crore — enough to fund 1 NIFTY1! contract at any point value (R is in points, unaffected)
+     default_qty_type        = strategy.fixed,                // fixed contracts so R is comparable across runs
+     default_qty_value       = 2,                             // 2 contracts so the runner can split (book 1, run 1); see inContracts
+     commission_type         = strategy.commission.percent,   // mild realistic cost proxy
+     commission_value        = 0.03,                          // 0.03% per order
+     slippage                = 2,                             // 2 ticks (NIFTY fut tick = 0.05 -> 0.10 pts)
+     currency                = currency.INR,
+     max_labels_count        = 500,                           // cap drawing objects (Section 7 deletes stale ones)
+     max_lines_count         = 500,
+     close_entries_rule      = "ANY")
+
+// =============================================================================
+// === 1. INPUTS ===
+// Every trading-logic tunable lives here with group + tooltip. No magic numbers
+// in logic. NOTE on the <=8 optimisable-edge-param budget: the 7 CONTINUOUS edge
+// params are extAtr, rsiOversold, rsiOverbought, atrMult, rrTarget, minAtr, maxAdx.
+// Categorical (targetMode) is NOT counted; lengths/structural config (atrLen, rsiLen,
+// adxLen, swingLook, swingBuf, confirmWin, emaFast/Slow [context-only], sessions,
+// runner, display) are NOT to be curve-fitted and do not count.
+// =============================================================================
+
+// --- group labels (single source of truth; plain literal assignment keeps them
+//     const-qualified, as input()'s group= requires) ---
+GRP_SESSION = "Session"
+GRP_BIAS    = "Bias (GATE 1)"
+GRP_TRIGGER = "Trigger (GATE 2)"
+GRP_RISK    = "Risk (GATE 3 + exits)"
+GRP_DISPLAY = "Display"
+GRP_ALERTS  = "Alerts"
+
+// --- Session ---
+inTz           = input.string("Asia/Kolkata", "Timezone", group = GRP_SESSION,
+     tooltip = "IANA timezone for all session windows. NIFTY trades in IST = Asia/Kolkata.")
+inSessTrade    = input.session("0920-1510", "Trading session", group = GRP_SESSION,
+     tooltip = "Bars inside this window are eligible for the strategy. Default 09:20-15:10 IST.")
+inSessEntry    = input.session("0920-1445", "New-entry window", group = GRP_SESSION,
+     tooltip = "NEW entries only allowed inside this window. Default 09:20-14:45 (no fresh entries after 14:45).")
+inSessFlat     = input.session("1515-1530", "Force-flat window", group = GRP_SESSION,
+     tooltip = "Any open position is force-closed once a bar falls in this window. Default 15:15-15:30.")
+inSkipOpenBars = input.int(2, "Skip first N session bars", minval = 0, group = GRP_SESSION,
+     tooltip = "Skip the first N bars after the session opens to avoid opening-auction noise. Default 2.")
+
+// --- Mean reference (the level price reverts to) ---
+inBiasRef = input.string("VWAP", "Mean reference", options = ["VWAP", "SessionAvg"], group = GRP_BIAS,
+     tooltip = "The MEAN that price reverts to and is measured against. VWAP = session VWAP (auto-falls back to " +
+       "SessionAvg when session volume is na/0). SessionAvg = volume-free session-anchored mean. This is NOT a trend gate.")
+inBiasSrc = input.source(hlc3, "Mean price source", group = GRP_BIAS,
+     tooltip = "Source feeding VWAP / SessionAvg. Default hlc3 (typical price).")
+inEmaFast = input.int(9, "EMA fast (context only)", minval = 1, group = GRP_BIAS,
+     tooltip = "Plotted for visual context ONLY — not used in any signal (this strategy has no trend gate).")
+inEmaSlow = input.int(21, "EMA slow (context only)", minval = 2, group = GRP_BIAS,
+     tooltip = "Plotted for visual context ONLY — not used in any signal.")
+
+// --- Entry: fade the extension (GATE 2) ---  NO trend filter.
+inExtAtr      = input.float(2.0, "Extension distance (ATR)", minval = 0.1, step = 0.1, group = GRP_TRIGGER,
+     tooltip = "Setup requires price stretched at least this far (ATR units) from the mean: CE if close <= mean - extAtr*ATR; PE mirror. Default 2.0. [edge param]")
+inRsiLen      = input.int(14, "RSI length", minval = 2, group = GRP_TRIGGER,
+     tooltip = "RSI period for the oscillator extreme. Default 14 (config).")
+inRsiOversold   = input.float(28.0, "RSI oversold (CE flush)", minval = 1.0, maxval = 49.0, step = 1.0, group = GRP_TRIGGER,
+     tooltip = "CE setup needs RSI <= this = a GENUINE oversold (valid here because there is NO trend filter). Default 28. [edge param]")
+inRsiOverbought = input.float(72.0, "RSI overbought (PE spike)", minval = 51.0, maxval = 99.0, step = 1.0, group = GRP_TRIGGER,
+     tooltip = "PE setup needs RSI >= this = a genuine overbought. Default 72 (mirror). [edge param]")
+inConfirmWin  = input.int(2, "Confirm window (bars)", minval = 0, group = GRP_TRIGGER,
+     tooltip = "After an extension+RSI setup arms, the reversal-confirm bar may appear on the same bar OR within this many following bars. Default 2. 0 = same-bar only. Config.")
+
+// --- Risk: structural stop (below pullback swing) + target (GATE 3 + exits) ---
+inAtrLen       = input.int(14, "ATR length", minval = 1, group = GRP_RISK,
+     tooltip = "ATR period for the stop floor and volatility filters. Default 14 (config).")
+inSwingLook    = input.int(10, "Swing lookback (bars)", minval = 2, group = GRP_RISK,
+     tooltip = "Bars used for the structural-stop swing low/high (beyond the extension extreme). Default 10 (config).")
+inSwingBufAtr  = input.float(0.2, "Swing buffer (ATR)", minval = 0.0, step = 0.05, group = GRP_RISK,
+     tooltip = "Stop is placed this far (ATR units) beyond the pullback swing low/high so wicks don't clip it. Default 0.2 (config).")
+inAtrMult      = input.float(1.2, "Min stop distance (ATR)", minval = 0.1, step = 0.1, group = GRP_RISK,
+     tooltip = "Floor on R: the stop is never tighter than atrMult*ATR from entry (structural stop is used when it is WIDER). Default 1.2. [edge param]")
+inTargetMode   = input.string("mean", "Target mode", options = ["mean", "rmult"], group = GRP_RISK,
+     tooltip = "mean = exit at the mean (VWAP/SessionAvg) price reverts to (falls back to rmult if the mean is the wrong side of entry). rmult = fixed rrTarget*R. Reversion targets are CLOSE. Categorical.")
+inRrTarget     = input.float(1.5, "Reward:Risk target (rmult)", minval = 0.5, step = 0.1, group = GRP_RISK,
+     tooltip = "Target = entry +/- rrTarget*R when targetMode=rmult. Reversion targets are close -> default 1.5. [edge param]")
+inMinAtr       = input.float(0.0, "Min ATR (skip dead range)", minval = 0.0, step = 0.5, group = GRP_RISK,
+     tooltip = "Block entries when ATR < this (dead market). 0 = disabled. [edge param]")
+inMaxAtr       = input.float(0.0, "Max ATR (skip whipsaw, 0=off)", minval = 0.0, step = 0.5, group = GRP_RISK,
+     tooltip = "Optional: block entries when ATR > this (news whipsaw). 0 = disabled (config).")
+
+// --- Regime guard (the critical tail control for pure reversion) ---
+GRP_REGIME = "Regime guard"
+inUseAdxGuard = input.bool(true, "Refuse to fade when trending (ADX)", group = GRP_REGIME,
+     tooltip = "ON (default) = block entries when ADX > maxAdx, so a strongly trending day cannot run the fade over. The key protection for pure reversion.")
+inAdxLen      = input.int(14, "ADX length", minval = 2, group = GRP_REGIME,
+     tooltip = "ADX/DMI period. Default 14 (config).")
+inMaxAdx      = input.float(30.0, "Max ADX to allow a fade", minval = 1.0, step = 1.0, group = GRP_REGIME,
+     tooltip = "Skip the fade when ADX exceeds this (market trending too hard to revert). Default 30. [edge param]")
+
+// --- Runner exit (partial book + loose chandelier trail) ---
+GRP_RUNNER = "Runner exit"
+inUseRunner   = input.bool(false, "Use runner exit (else fixed target)", group = GRP_RUNNER,
+     tooltip = "OFF (default) = fixed target (targetMode). ON = book a fraction at firstTgtR, let the rest run on a loose chandelier (lets trend resumption run). A/B both on this file.")
+inContracts   = input.int(2, "Total contracts (>=2 to split)", minval = 1, group = GRP_RUNNER,
+     tooltip = "Entry size. Runner needs >=2 so it can book one slice and run another. Must allow the bookFrac split. Default 2.")
+inBookFrac    = input.float(50.0, "Book % at first target", minval = 1.0, maxval = 99.0, step = 5.0, group = GRP_RUNNER,
+     tooltip = "Fraction of the position booked at the first target. Rounded to whole contracts; with 2 contracts ~50% = 1 booked + 1 runner.")
+inFirstTgtR   = input.float(2.0, "First target (R)", minval = 0.5, step = 0.5, group = GRP_RUNNER,
+     tooltip = "Runner mode: booked slice exits here (default 2.0R), the rest runs on the chandelier to harvest the 3R-5R tail. Config.")
+inTrailAtrMult = input.float(2.5, "Runner trail ATR mult", minval = 0.5, step = 0.5, group = GRP_RUNNER,
+     tooltip = "Chandelier distance for the RUNNER (highest-high-since-entry - mult*ATR). SEPARATE from the 1.2 initial-stop mult — keep it LOOSE (2.5-3.0) so normal pullbacks don't scratch the 3R-5R tail. [edge param]")
+
+// --- Display ---
+inShowEmas      = input.bool(true,  "Show EMAs", group = GRP_DISPLAY,
+     tooltip = "Plot emaFast / emaSlow for visual context.")
+inShowBiasRef   = input.bool(true,  "Show bias reference", group = GRP_DISPLAY,
+     tooltip = "Plot the resolved bias reference (VWAP or SessionAvg).")
+inShowSignals   = input.bool(false, "Show signal markers (debug)", group = GRP_DISPLAY,
+     tooltip = "On-chart DEBUG markers: solid triangles = final gated signals (sigLong below bar / sigShort above bar); " +
+       "faint circles = RAW pre-gate pullback triggers (before bias/GATE3). Visualization ONLY — does not affect orders.")
+inShowSessionBg = input.bool(false, "Shade trading session", group = GRP_DISPLAY,
+     tooltip = "Tint the background during the trading session window.")
+inShowDebug     = input.bool(false, "Show debug panel + data-window series", group = GRP_DISPLAY,
+     tooltip = "Show a parameter panel and push internal series to the Data Window for verification.")
+inWarnTf        = input.bool(true,  "Warn if chart TF != expected", group = GRP_DISPLAY,
+     tooltip = "Show a warning label when the chart timeframe differs from the expected minutes below.")
+inExpectedTfMin = input.int(5, "Expected timeframe (minutes)", minval = 1, group = GRP_DISPLAY,
+     tooltip = "Timeframe this strategy is designed for. Default 5 (minutes).")
+
+// --- Alerts ---
+inAlertTag = input.string("NIFTY FUT", "Alert symbol label", group = GRP_ALERTS,
+     tooltip = "Text label inserted into alert messages so webhooks know the instrument.")
+
+// =============================================================================
+// === 2. INDICATORS / DATA ===
+// Single-responsibility data layer. Helper functions first (encapsulated state /
+// pure where possible, per CLAUDE.md §5), then the session-independent series.
+// =============================================================================
+
+// f_barCount: bars elapsed since the caller-supplied reset (isNew). Encapsulated
+// `var` state, one instance per call site. Resets to 1 on the reset bar, then
+// increments while isIn is true.
+f_barCount(bool isNew, bool isIn) =>
+    var int n = 0
+    if isNew
+        n := 1
+    else if isIn
+        n := n + 1
+    n
+
+// f_sessionAgg: volume-FREE running mean of `src` since the caller-supplied reset
+// (isNew) — a VWAP proxy that survives volume-less feeds — plus the running volume
+// sum used to test whether the feed's volume is real. Encapsulated `var` state;
+// resets on isNew, accumulates while isIn. Returns [mean, volumeSum]; div-by-zero guarded.
+f_sessionAgg(float src, float vol, bool isNew, bool isIn) =>
+    var float s    = na
+    var int   c    = 0
+    var float vsum = na
+    if isNew
+        s    := src
+        c    := 1
+        vsum := nz(vol)
+    else if isIn
+        s    := nz(s) + src
+        c    := c + 1
+        vsum := nz(vsum) + nz(vol)
+    [c > 0 ? s / c : na, vsum]
+
+// f_resolveBiasRef: PURE. Picks the GATE-1 price reference. "VWAP" uses true VWAP
+// only when volume is reliable, else falls back to the volume-free mean. "EMA-only"
+// returns na so the bias gate drops the price-vs-reference term entirely.
+f_resolveBiasRef(string mode, float vwapV, float sessAvgV, bool volOk) =>
+    switch mode
+        "SessionAvg" => sessAvgV
+        "EMA-only"   => na
+        => volOk and not na(vwapV) ? vwapV : sessAvgV
+
+// --- session-independent series (each computed ONCE, unconditionally, so the
+//     accumulating built-in ta.vwap stays correct) ---
+emaFast = ta.ema(close, inEmaFast)   // context plots only (no trend gate)
+emaSlow = ta.ema(close, inEmaSlow)
+atrVal  = ta.atr(inAtrLen)
+rsiVal  = ta.rsi(close, inRsiLen)    // oscillator extreme for the fade
+[diPlus, diMinus, adxVal] = ta.dmi(inAdxLen, inAdxLen)   // ADX = regime guard (refuse to fade strong trends)
+// Swing extremes over the lookback (computed every bar; consumed at entry for the
+// structural stop placed BEYOND the extension extreme).
+swingLow  = ta.lowest(low,  inSwingLook)
+swingHigh = ta.highest(high, inSwingLook)
+
+// Raw session VWAP. Requires volume; returns na on a volume-less feed (handled in
+// Section 3 via the SessionAvg fallback). Anchors to session start internally.
+vwapRaw = ta.vwap(inBiasSrc)
+
+// =============================================================================
+// === 3. SESSION & FILTERS ===
+// Trade-eligibility windows, the trading-DAY anchor (shared by VWAP + the SessionAvg
+// fallback), day-anchored aggregates + volume reliability, and the resolved bias
+// reference. No trade decisions here — just the booleans/series the gates consume.
+// =============================================================================
+
+// --- trade-eligibility session windows (na outside the window) ---
+inSession     = not na(time(timeframe.period, inSessTrade, inTz))   // 09:20-15:10 entry-eligible window
+inEntryWindow = not na(time(timeframe.period, inSessEntry, inTz))   // 09:20-14:45 new-entry window
+inFlatWindow  = not na(time(timeframe.period, inSessFlat,  inTz))   // 15:15-15:30 force-flat window
+
+// Expiry-day flag (NIFTY weekly options expire Thursday). DISPLAY-ONLY in the
+// dashboard — deliberately NOT a hard block (just visible context for the human).
+isExpiryDay = dayofweek == dayofweek.thursday
+
+// --- trading-DAY anchor: true on the first intraday bar of each new day, i.e. the
+//     first bar at/after the session open (~09:15 IST). This MATCHES ta.vwap's own
+//     per-day reset, so VWAP and the SessionAvg fallback share ONE anchor. ---
+isNewDay = timeframe.change("1D")
+
+// --- bars since the trading day opened. skipOpenBars counts from the 09:15 open
+//     (STRATEGY_SPEC: "skips 09:15-09:25"); accumulate every bar, reset on isNewDay ---
+barsInDay      = f_barCount(isNewDay, true)
+afterOpenNoise = inSession and barsInDay > inSkipOpenBars
+
+// --- day-anchored aggregates (full day, exactly like VWAP): volume-free mean +
+//     volume sum. On a regular-session feed every bar belongs to the day, so
+//     accumulating every bar between isNewDay resets mirrors ta.vwap. ---
+[sessAvg, cumVol] = f_sessionAgg(inBiasSrc, volume, isNewDay, true)
+// feed has real volume this day? -> selects true VWAP vs the SessionAvg fallback
+volReliable = not na(cumVol) and cumVol > 0
+
+// --- resolved bias reference (true VWAP when volume reliable, else SessionAvg) ---
+biasRefPrice = f_resolveBiasRef(inBiasRef, vwapRaw, sessAvg, volReliable)
+// active-source code for verification: 1 = VWAP, 0 = SessionAvg, -1 = EMA-only
+activeSrcCode = inBiasRef == "EMA-only" ? -1.0 : inBiasRef == "SessionAvg" ? 0.0 : (volReliable and not na(vwapRaw) ? 1.0 : 0.0)
+
+// --- timeframe sanity warning (managed label; stale deleted each last bar) ---
+tfMismatch = inWarnTf and timeframe.in_seconds() != inExpectedTfMin * 60
+var label tfLbl = na
+if barstate.islast
+    label.delete(tfLbl)
+    if tfMismatch
+        tfLbl := label.new(bar_index, high, "WARN: chart TF != " + str.tostring(inExpectedTfMin) +
+             "m. Strategy is designed for " + str.tostring(inExpectedTfMin) + "m.",
+             style = label.style_label_down, color = color.orange, textcolor = color.white, size = size.small)
+
+// =============================================================================
+// === 4. SIGNAL LOGIC (GATES) ===
+// PULLBACK family. Boolean signals only — NO orders here (Section 6 wires risk).
+// Every input to every gate is a COMPLETED value at bar close; historical bars
+// are immutable, so none of these booleans can repaint. (On the live forming bar
+// they may flicker intrabar and settle at close — entries act on the close via
+// process_orders_on_close, so execution uses the settled value.)
+// =============================================================================
+
+// NO bias/trend gate — this is the key difference: we fade the extension regardless
+// of trend direction (the ADX regime guard in GATE 3 is what refuses trending days).
+
+// --- GATE 2: fade the extension (extension + RSI extreme + reversal confirm) ---
+// CE (buy the flush): price stretched FAR below the mean AND RSI genuinely oversold,
+// then a bullish reversal bar. PE (sell the spike) mirrors it. No trend term.
+// Non-repaint: close/open are the COMPLETED bar's OHLC; biasRefPrice/atrVal/rsiVal are
+// from completed bars; read at bar close (orders fill at that close via
+// process_orders_on_close), so nothing here can move on a later tick.
+extLong   = not na(biasRefPrice) and close <= biasRefPrice - inExtAtr * atrVal   // stretched below the mean
+extShort  = not na(biasRefPrice) and close >= biasRefPrice + inExtAtr * atrVal   // stretched above the mean
+rsiOsLong  = rsiVal <= inRsiOversold                    // genuine oversold (valid: no trend filter)
+rsiObShort = rsiVal >= inRsiOverbought
+confirmLong  = close > open                             // bullish reversal bar (flush rejected)
+confirmShort = close < open                             // bearish reversal bar (spike rejected)
+setupLong  = extLong  and rsiOsLong                     // the fade setup (no confirm yet)
+setupShort = extShort and rsiObShort
+
+// 2-bar confirm WINDOW: the setup arms a counter; the reversal bar then fires the
+// entry on the setup bar itself OR within the next inConfirmWin bars (disarm on expiry
+// or on fire). Non-repaint: setup/confirm each read on their own CONFIRMED bar close;
+// armLong is a plain var counter using the PRIOR bar's value -> no lookahead.
+var int armLong  = 0
+var int armShort = 0
+trigLong  = confirmLong  and (setupLong  or armLong  > 0)
+trigShort = confirmShort and (setupShort or armShort > 0)
+armLong  := trigLong  ? 0 : setupLong  ? inConfirmWin : (armLong  > 0) ? armLong  - 1 : 0
+armShort := trigShort ? 0 : setupShort ? inConfirmWin : (armShort > 0) ? armShort - 1 : 0
+
+// --- GATE 3: context block (any true => no entry) ---
+// Non-repaint: session/entry windows from time(), afterOpenNoise from a monotonic
+// counter, ATR/ADX from completed bars, position state known. ADX guard refuses to
+// fade a strongly trending market (pure reversion's failure mode).
+atrOk      = not na(atrVal)
+atrTooLow  = atrOk and atrVal < inMinAtr                       // inMinAtr=0 disables
+atrTooHigh = atrOk and inMaxAtr > 0 and atrVal > inMaxAtr      // inMaxAtr=0 disables
+adxBlock   = inUseAdxGuard and not na(adxVal) and adxVal > inMaxAdx   // too trendy to fade
+posOpen    = strategy.position_size != 0
+// Block entries until sizing indicators are warm, else stop/R/target would be na.
+dataReady  = not na(atrVal) and not na(rsiVal) and not na(biasRefPrice)
+// Split GATE 3 so the flip-exit can reuse the context filters WITHOUT posOpen.
+gate3BlockNoPos = (not dataReady) or (not inSession) or (not inEntryWindow) or (not afterOpenNoise) or atrTooLow or atrTooHigh or adxBlock
+gate3Block      = gate3BlockNoPos or posOpen
+
+// --- combined entry signals (posOpen-gated -> only fire when flat) ---
+sigLong  = trigLong  and not gate3Block
+sigShort = trigShort and not gate3Block
+
+// --- raw opposite signals for the flip-exit: a VALID opposite entry IGNORING the
+//     open position (all gates except posOpen). Non-repainting (completed values). ---
+oppLongRaw  = trigLong  and not gate3BlockNoPos
+oppShortRaw = trigShort and not gate3BlockNoPos
+
+// =============================================================================
+// === 5. RISK & EXITS ===
+// State for the single open position (pyramiding=0). Geometry is fixed on the entry
+// SIGNAL bar — whose close is the fill under process_orders_on_close — then the
+// trail ratchets using completed-bar values only. NO order calls here (Section 6).
+// =============================================================================
+var int    posDir          = 0      // 1 long / -1 short / 0 flat
+var float  entryPx         = na     // intended entry = signal-bar close
+var float  initStop        = na     // initial protective stop
+var float  rVal            = na     // R = |entry - initStop|
+var float  targetPx        = na     // take-profit (swing or rrTarget*R) — fixed-exit limit leg
+var int    entryBarIdx     = na     // bar_index of the entry (anchors the stop line)
+var string pendingReason   = na     // set when WE close (time/flip); else inferred
+var float  closingFirstTgt = na     // snapshot of first-target level while in position (exit classify)
+var float  closingR        = na     // snapshot of R (points) while in position (for realized-R)
+// --- runner-exit state (used only when inUseRunner) ---
+var float  firstTgtPx      = na     // booked slice take-profit = entry +/- inFirstTgtR*R
+var bool   t1Done          = false  // has the first target been reached this trade?
+var float  hhSince         = na     // highest high since entry (long chandelier)
+var float  llSince         = na     // lowest  low  since entry (short chandelier)
+var float  runnerStop      = na     // runner's stop: initStop pre-T1, then BE+chandelier
+
+enterLong  = sigLong                // sigLong already requires flat (posOpen in GATE 3)
+enterShort = sigShort
+
+// --- fix geometry on the entry (reversal) bar ---
+// STOP = BEYOND the extension extreme: below the recent swing low (long) minus an ATR
+// buffer, FLOORED so it is never tighter than atrMult*ATR (structural stop used when
+// wider). TARGET = the MEAN (biasRefPrice) if it is the right side of entry, else
+// rrTarget*R. Non-repaint: swingLow/swingHigh/atrVal/biasRefPrice are completed-bar
+// series; close is final at bar close.
+if enterLong
+    posDir        := 1
+    entryPx       := close
+    structStopL    = swingLow - inSwingBufAtr * atrVal
+    floorStopL     = close - inAtrMult * atrVal
+    initStop      := math.min(structStopL, floorStopL)                 // wider (lower) of the two
+    rVal          := entryPx - initStop
+    targetPx      := inTargetMode == "mean" and biasRefPrice > entryPx ? biasRefPrice : entryPx + inRrTarget * rVal
+    entryBarIdx   := bar_index
+    pendingReason := na
+    firstTgtPx    := entryPx + inFirstTgtR * rVal
+    t1Done        := false
+    hhSince       := high
+    runnerStop    := initStop
+if enterShort
+    posDir        := -1
+    entryPx       := close
+    structStopS    = swingHigh + inSwingBufAtr * atrVal
+    floorStopS     = close + inAtrMult * atrVal
+    initStop      := math.max(structStopS, floorStopS)                 // wider (higher) of the two
+    rVal          := initStop - entryPx
+    targetPx      := inTargetMode == "mean" and biasRefPrice < entryPx ? biasRefPrice : entryPx - inRrTarget * rVal
+    entryBarIdx   := bar_index
+    pendingReason := na
+    firstTgtPx    := entryPx - inFirstTgtR * rVal
+    t1Done        := false
+    llSince       := low
+    runnerStop    := initStop
+
+inPos = strategy.position_size != 0
+
+// --- runner stop (ONLY when inUseRunner): book at firstTgt, then BE + loose
+// chandelier (highest-high-since-entry - trailAtrMult*ATR) for the remainder.
+// Before the first target is hit the runner sits at the -1R initStop. BE floor is
+// applied only AFTER t1Done (so a pre-target dip can't scratch at breakeven).
+// Non-repaint: uses THIS bar's completed high/low + atrVal; the updated stop is
+// applied via strategy.exit and only checked on SUBSEQUENT bars.
+if inUseRunner and inPos and posDir == 1 and rVal > 0
+    hhSince := math.max(hhSince, high)
+    if not t1Done and high >= firstTgtPx
+        t1Done := true
+    runnerStop := t1Done ? math.max(runnerStop, math.max(entryPx, hhSince - inTrailAtrMult * atrVal)) : initStop
+if inUseRunner and inPos and posDir == -1 and rVal > 0
+    llSince := math.min(llSince, low)
+    if not t1Done and low <= firstTgtPx
+        t1Done := true
+    runnerStop := t1Done ? math.min(runnerStop, math.min(entryPx, llSince + inTrailAtrMult * atrVal)) : initStop
+
+// snapshot live levels so the exit-reason classifier survives a same-bar re-entry
+if inPos
+    closingFirstTgt := firstTgtPx
+    closingR        := rVal
+
+// --- exits we trigger ourselves (the OCO bracket handles stop/target) ---
+// Time stop: force-flat in the flat window (15:15). Flip: a VALID opposite entry
+// (all gates except posOpen) appears -> close now; re-entry (if still valid) is a
+// LATER bar via the normal path. Non-repaint: inFlatWindow from time(); oppRaw from
+// completed values.
+timeExit = inPos and inFlatWindow
+flipExit = inPos and ((posDir == 1 and oppShortRaw) or (posDir == -1 and oppLongRaw))
+
+// --- MFE / MAE INSTRUMENTATION (measurement only — NO effect on trading) ---
+// To see how far winners WOULD run if not capped at the 2R target, shadow each entry
+// from its fill and track max favorable / adverse excursion in R, IGNORING the target,
+// until the -1R stop or the 15:15 time-stop. Concurrent live entries held in arrays.
+// Pure measurement: no strategy.* calls here; the actual strategy still exits at 2R.
+var array<float> mfeEntry = array.new_float()   // entry price per live shadow
+var array<float> mfeRpts  = array.new_float()   // R (points) per shadow
+var array<float> mfeStop  = array.new_float()   // -1R stop level per shadow
+var array<int>   mfeDir   = array.new_int()     // 1 long / -1 short
+var array<float> mfeMaxF  = array.new_float()   // running max favorable excursion (R)
+var array<float> mfeMaxA  = array.new_float()   // running max adverse  excursion (R)
+var int   mfeN   = 0                            // finalized shadows
+var int   mfeGe1 = 0                             // cumulative: MFE reached >= 1R
+var int   mfeGe2 = 0                             //                          >= 2R
+var int   mfeGe3 = 0                             //                          >= 3R
+var int   mfeGe4 = 0                             //                          >= 4R
+var int   mfeGe5 = 0                             //                          >= 5R
+var float mfeSumAdv = 0.0                        // sum of max adverse excursion (R)
+
+// 1) advance existing shadows on THIS bar's high/low; terminate on -1R stop or 15:15.
+//    while-loop with manual index: on removal, DON'T advance i (the next element
+//    shifts into i). Pine forbids a negative 'for' step, so this is the safe pattern.
+int mfeI = 0
+while mfeI < array.size(mfeEntry)
+    e   = array.get(mfeEntry, mfeI)
+    rp  = array.get(mfeRpts, mfeI)
+    stp = array.get(mfeStop, mfeI)
+    dir = array.get(mfeDir, mfeI)
+    favR = dir == 1 ? (high - e) / rp : (e - low) / rp
+    advR = dir == 1 ? (e - low) / rp : (high - e) / rp
+    array.set(mfeMaxF, mfeI, math.max(array.get(mfeMaxF, mfeI), favR))
+    array.set(mfeMaxA, mfeI, math.max(array.get(mfeMaxA, mfeI), advR))
+    stopHit = dir == 1 ? low <= stp : high >= stp
+    if stopHit or inFlatWindow
+        mx = array.get(mfeMaxF, mfeI)
+        mfeN   += 1
+        mfeGe1 += mx >= 1.0 ? 1 : 0
+        mfeGe2 += mx >= 2.0 ? 1 : 0
+        mfeGe3 += mx >= 3.0 ? 1 : 0
+        mfeGe4 += mx >= 4.0 ? 1 : 0
+        mfeGe5 += mx >= 5.0 ? 1 : 0
+        mfeSumAdv += array.get(mfeMaxA, mfeI)
+        array.remove(mfeEntry, mfeI)
+        array.remove(mfeRpts, mfeI)
+        array.remove(mfeStop, mfeI)
+        array.remove(mfeDir, mfeI)
+        array.remove(mfeMaxF, mfeI)
+        array.remove(mfeMaxA, mfeI)
+    else
+        mfeI += 1
+// 2) register a shadow for an entry that fired THIS bar (it starts accruing next bar)
+if (enterLong or enterShort) and not na(rVal) and rVal > 0
+    array.push(mfeEntry, close)
+    array.push(mfeRpts, rVal)
+    array.push(mfeStop, initStop)
+    array.push(mfeDir, enterLong ? 1 : -1)
+    array.push(mfeMaxF, 0.0)
+    array.push(mfeMaxA, 0.0)
+
+// =============================================================================
+// === 6. ORDERS ===
+// Entry: long = CE bias, short = PE bias. Exit: ONE OCO bracket (stop+limit linked)
+// per position via strategy.exit; strategy.close_all for time-stop and flip.
+// Non-repaint: orders are submitted on confirmed bars and, with
+// process_orders_on_close=true, market entries fill at THIS bar's close (the settled
+// signal value) — the signal bar IS the fill bar. Same-bar stop+target ambiguity:
+// TV's tester fills the STOP FIRST (conservative); no bar-magnifier hacks added.
+// =============================================================================
+if enterLong
+    strategy.entry("Long", strategy.long, qty = inContracts)    // CE bias (profits when spot rises)
+if enterShort
+    strategy.entry("Short", strategy.short, qty = inContracts)  // PE bias (profits when spot falls)
+
+bracketActive = inPos or enterLong or enterShort
+// comment_profit/comment_loss tag the List-of-Trades "Signal" so each exit door is
+// distinguishable. Re-called each bar so the runner's trailing stop updates.
+if inUseRunner
+    // PARTIAL + RUNNER. T1 books `bookQty` at the first target (OCO vs initStop) and
+    // is placed only until t1Done, so it never re-targets the runner slice. Run trails
+    // the remaining `runQty` on runnerStop (= initStop pre-T1, BE+chandelier after).
+    bookQty = int(math.max(1, math.min(inContracts - 1, math.round(inContracts * inBookFrac / 100.0))))
+    runQty  = inContracts - bookQty
+    if bracketActive and posDir == 1
+        if not t1Done and bookQty >= 1
+            strategy.exit("T1",  from_entry = "Long",  qty = bookQty, stop = initStop, limit = firstTgtPx, comment_profit = "firstTgt", comment_loss = "stop")
+        if runQty >= 1
+            strategy.exit("Run", from_entry = "Long",  qty = runQty, stop = runnerStop, comment_profit = "runnerTrail", comment_loss = "stop")
+    else if bracketActive and posDir == -1
+        if not t1Done and bookQty >= 1
+            strategy.exit("T1",  from_entry = "Short", qty = bookQty, stop = initStop, limit = firstTgtPx, comment_profit = "firstTgt", comment_loss = "stop")
+        if runQty >= 1
+            strategy.exit("Run", from_entry = "Short", qty = runQty, stop = runnerStop, comment_profit = "runnerTrail", comment_loss = "stop")
+else
+    // FIXED-target bracket: structural stop + targetPx (swing or rrTarget*R).
+    if bracketActive and posDir == 1
+        strategy.exit("Bracket", from_entry = "Long",  stop = initStop, limit = targetPx, comment_profit = "target", comment_loss = "stop")
+    else if bracketActive and posDir == -1
+        strategy.exit("Bracket", from_entry = "Short", stop = initStop, limit = targetPx, comment_profit = "target", comment_loss = "stop")
+
+// Time-stop / flip: market close at this bar's close (process_orders_on_close).
+// pendingReason tags the close so rendering can show the correct reason.
+if timeExit
+    pendingReason := "time"
+    strategy.close_all(comment = "time stop")
+else if flipExit
+    pendingReason := "flip"
+    strategy.close_all(comment = "flip")
+
+// =============================================================================
+// === 7. PLOTTING ===
+// Context plots, debug markers/series, BUY/EXIT labels off ACTUAL fills, and live
+// stop/target lines (deleted when flat).
+// =============================================================================
+// EMAs are not session-anchored -> plot continuously.
+plot(inShowEmas ? emaFast : na, "EMA fast", color = color.new(color.aqua,   0), linewidth = 1)
+plot(inShowEmas ? emaSlow : na, "EMA slow", color = color.new(color.orange, 0), linewidth = 1)
+// Bias ref IS day-anchored -> plot na on the first bar of each new day so no
+// vertical connector is drawn across the anchor reset. Line resumes next bar.
+plot((inShowBiasRef and not isNewDay) ? biasRefPrice : na, "Bias ref", color = color.new(color.fuchsia, 0), linewidth = 2)
+
+bgcolor(inShowSessionBg and inSession ? color.new(color.blue, 92) : na, title = "Session shade")
+
+// --- on-chart signal markers (DEBUG visualization only; inShowSignals, default off) ---
+// Two layers (no bias gate in this strategy):
+//   faint circle   = RAW fade trigger (ext+RSI setup -> reversal confirm within window)
+//   orange X-cross = trigger fired but blocked by GATE 3 (session / ADX guard / etc.)
+//   solid triangle = final signal: passed GATE 3 (would enter)
+// NON-REPAINT: historical bars fixed; the live bar may flicker and settles at close.
+// No effect on orders.
+ctxRejectLong  = trigLong  and gate3Block   // trigger fired but blocked by context (session/ADX/etc.)
+ctxRejectShort = trigShort and gate3Block
+plotshape(inShowSignals and trigLong,       title = "raw fade-CE",      style = shape.circle,       location = location.belowbar, color = color.new(color.green,  70), size = size.tiny)
+plotshape(inShowSignals and trigShort,      title = "raw fade-PE",      style = shape.circle,       location = location.abovebar, color = color.new(color.maroon, 70), size = size.tiny)
+plotshape(inShowSignals and ctxRejectLong,  title = "ctx-reject Long",   style = shape.xcross,       location = location.belowbar, color = color.new(color.orange, 0), size = size.tiny)
+plotshape(inShowSignals and ctxRejectShort, title = "ctx-reject Short",  style = shape.xcross,       location = location.abovebar, color = color.new(color.orange, 0), size = size.tiny)
+plotshape(inShowSignals and sigLong,        title = "sig Long",          style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime,    0), size = size.tiny)
+plotshape(inShowSignals and sigShort,       title = "sig Short",         style = shape.triangledown, location = location.abovebar, color = color.new(color.red,     0), size = size.tiny)
+
+// --- debug series -> Data Window only (no chart clutter), gated by toggle ---
+plot(inShowDebug ? biasRefPrice                : na, "dbg biasRef",    display = display.data_window)
+plot(inShowDebug ? activeSrcCode               : na, "dbg activeSrc 1=VWAP 0=SessAvg -1=EMA", display = display.data_window)
+plot(inShowDebug ? vwapRaw                     : na, "dbg vwapRaw",    display = display.data_window)
+plot(inShowDebug ? sessAvg                     : na, "dbg SessAvg",    display = display.data_window)
+plot(inShowDebug ? (volReliable   ? 1 : 0)     : na, "dbg volReliable",display = display.data_window)
+plot(inShowDebug ? (isNewDay      ? 1 : 0)     : na, "dbg isNewDay",   display = display.data_window)
+plot(inShowDebug ? atrVal                      : na, "dbg ATR",        display = display.data_window)
+plot(inShowDebug ? barsInDay                   : na, "dbg barsInDay",  display = display.data_window)
+plot(inShowDebug ? (inSession     ? 1 : 0)     : na, "dbg inSession",  display = display.data_window)
+plot(inShowDebug ? (inEntryWindow ? 1 : 0)     : na, "dbg inEntryWin", display = display.data_window)
+plot(inShowDebug ? (inFlatWindow  ? 1 : 0)     : na, "dbg inFlatWin",  display = display.data_window)
+plot(inShowDebug ? (afterOpenNoise? 1 : 0)     : na, "dbg afterOpen",  display = display.data_window)
+// --- GATE debug (Phase 2): eyeball which bars fire ---
+plot(inShowDebug ? (extLong       ? 1 : 0)     : na, "dbg extLong",       display = display.data_window)
+plot(inShowDebug ? (extShort      ? 1 : 0)     : na, "dbg extShort",      display = display.data_window)
+plot(inShowDebug ? adxVal                      : na, "dbg ADX",           display = display.data_window)
+plot(inShowDebug ? (trigLong  ? 1 : 0)         : na, "dbg trigLong",     display = display.data_window)
+plot(inShowDebug ? (trigShort ? 1 : 0)         : na, "dbg trigShort",    display = display.data_window)
+plot(inShowDebug ? rsiVal                      : na, "dbg RSI",          display = display.data_window)
+plot(inShowDebug ? (gate3Block    ? 1 : 0)     : na, "dbg gate3Block",    display = display.data_window)
+plot(inShowDebug ? (sigLong       ? 1 : 0)     : na, "dbg sigLong",       display = display.data_window)
+plot(inShowDebug ? (sigShort      ? 1 : 0)     : na, "dbg sigShort",      display = display.data_window)
+plot(inShowDebug ? emaFast                     : na, "dbg emaFast",          display = display.data_window)
+plot(inShowDebug ? (biasRefPrice - inExtAtr * atrVal) : na, "dbg extBandLo", display = display.data_window)
+
+// --- parameter echo panel (verifies "zero magic numbers"; references all
+//     not-yet-wired inputs so the scaffold has no unused-variable warnings) ---
+var table dbgT = na
+if inShowDebug and barstate.islast
+    if na(dbgT)
+        dbgT := table.new(position.top_right, 2, 16, border_width = 1)
+    activeSrcStr = inBiasRef == "SessionAvg" ? "SessionAvg" : (volReliable ? "VWAP" : "SessionAvg (fallback)")
+    table.cell(dbgT, 0, 0,  "PARAM",        bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(dbgT, 1, 0,  "VALUE",        bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(dbgT, 0, 1,  "Ext ATR",      text_size = size.small)
+    table.cell(dbgT, 1, 1,  str.tostring(inExtAtr), text_size = size.small)
+    table.cell(dbgT, 0, 2,  "Target mode",  text_size = size.small)
+    table.cell(dbgT, 1, 2,  inTargetMode,   text_size = size.small)
+    table.cell(dbgT, 0, 3,  "RSI os/ob",    text_size = size.small)
+    table.cell(dbgT, 1, 3,  str.tostring(inRsiOversold) + "/" + str.tostring(inRsiOverbought), text_size = size.small)
+    table.cell(dbgT, 0, 4,  "ADX guard",    text_size = size.small)
+    table.cell(dbgT, 1, 4,  (inUseAdxGuard ? "on <" : "off <") + str.tostring(inMaxAdx), text_size = size.small)
+    table.cell(dbgT, 0, 5,  "Stop floorxATR", text_size = size.small)
+    table.cell(dbgT, 1, 5,  str.tostring(inAtrMult), text_size = size.small)
+    table.cell(dbgT, 0, 6,  "R:R target",   text_size = size.small)
+    table.cell(dbgT, 1, 6,  str.tostring(inRrTarget), text_size = size.small)
+    table.cell(dbgT, 0, 7,  "Min ATR",      text_size = size.small)
+    table.cell(dbgT, 1, 7,  str.tostring(inMinAtr), text_size = size.small)
+    table.cell(dbgT, 0, 8,  "Swing look",   text_size = size.small)
+    table.cell(dbgT, 1, 8,  str.tostring(inSwingLook), text_size = size.small)
+    table.cell(dbgT, 0, 9,  "Use runner",   text_size = size.small)
+    table.cell(dbgT, 1, 9,  str.tostring(inUseRunner), text_size = size.small)
+    table.cell(dbgT, 0, 10, "Swing buf ATR", text_size = size.small)
+    table.cell(dbgT, 1, 10, str.tostring(inSwingBufAtr), text_size = size.small)
+    table.cell(dbgT, 0, 11, "Bias ref",     text_size = size.small)
+    table.cell(dbgT, 1, 11, inBiasRef,      text_size = size.small)
+    table.cell(dbgT, 0, 12, "Alert tag",    text_size = size.small)
+    table.cell(dbgT, 1, 12, inAlertTag,     text_size = size.small)
+    table.cell(dbgT, 0, 13, "Active src",   bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 1, 13, activeSrcStr,   bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 0, 14, "Vol reliable", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 1, 14, str.tostring(volReliable), bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 0, 15, "Expiry day",   bgcolor = isExpiryDay ? color.new(color.orange, 35) : color.new(color.teal, 60), text_size = size.small)
+    table.cell(dbgT, 1, 15, isExpiryDay ? "YES (Thu)" : "no", bgcolor = isExpiryDay ? color.new(color.orange, 35) : color.new(color.teal, 60), text_size = size.small)
+else if not inShowDebug and not na(dbgT)
+    table.delete(dbgT)
+    dbgT := na
+
+// --- trade rendering: labels driven off ACTUAL fills; live stop/target lines ---
+// Non-repaint: opentrades/closedtrades reflect SETTLED fills reported by the engine;
+// labels anchor to the real fill bar/price. (Under process_orders_on_close the fill
+// is at the signal bar's close; the count transition is seen on the next bar, so the
+// label is anchored back to entry_bar_index / exit_bar_index = the true fill bar.)
+newTradeOpened = strategy.opentrades   > nz(strategy.opentrades[1])
+newTradeClosed = strategy.closedtrades > nz(strategy.closedtrades[1])
+
+// exit-reason tally (per-LEG; a partial book splits a trade into up to 2 legs).
+// Counts + summed realized-R per bucket -> avg R per exit door.
+var int   cntFirstTgt  = 0
+var int   cntRunner    = 0
+var int   cntStop      = 0
+var int   cntTime      = 0
+var int   cntFlip      = 0
+var float sumRFirstTgt = 0.0
+var float sumRRunner   = 0.0
+var float sumRStop     = 0.0
+var float sumRTime     = 0.0
+var float sumRFlip     = 0.0
+
+// last leg closed this bar (for the Section-8 exit alert)
+bool   exitLong   = false
+float  exitPx     = na
+string exitReason = na
+
+// Loop over EVERY newly-closed leg (partials can finalize >1 leg per bar). The booked
+// (T1) leg fills at the EXACT first-target level via a limit, so xp == closingFirstTgt
+// identifies it; the chandelier runner never fills at that exact level. close_all legs
+// (time/flip) carry pendingReason.
+var int prevClosed = 0
+if strategy.closedtrades > prevClosed
+    for ci = prevClosed to strategy.closedtrades - 1
+        xb   = strategy.closedtrades.exit_bar_index(ci)
+        xp   = strategy.closedtrades.exit_price(ci)
+        ep   = strategy.closedtrades.entry_price(ci)
+        lng  = strategy.closedtrades.size(ci) > 0
+        prof = strategy.closedtrades.profit(ci)
+        isFirstTgt = not na(closingFirstTgt) and math.abs(xp - closingFirstTgt) <= syminfo.mintick * 2
+        reason = isFirstTgt ? "firstTgt" : (not na(pendingReason) ? pendingReason : (prof > 0 ? "runnerTrail" : "stop"))
+        rM = (na(closingR) or closingR == 0) ? na : (xp - ep) * (lng ? 1.0 : -1.0) / closingR
+        if reason == "firstTgt"
+            cntFirstTgt  += 1
+            sumRFirstTgt += nz(rM)
+        else if reason == "runnerTrail"
+            cntRunner  += 1
+            sumRRunner += nz(rM)
+        else if reason == "time"
+            cntTime  += 1
+            sumRTime += nz(rM)
+        else if reason == "flip"
+            cntFlip  += 1
+            sumRFlip += nz(rM)
+        else
+            cntStop  += 1
+            sumRStop += nz(rM)
+        // EXIT label per leg, reason in the tooltip
+        label.new(xb, xp, lng ? "EXIT CE" : "EXIT PE", xloc = xloc.bar_index,
+             style     = lng ? label.style_label_down : label.style_label_up,
+             color     = color.new(color.orange, 0), textcolor = color.black, size = size.small,
+             tooltip   = (lng ? "EXIT CE (" : "EXIT PE (") + reason + ") @ " + str.tostring(xp, format.mintick))
+        exitLong   := lng
+        exitPx     := xp
+        exitReason := reason
+    pendingReason := na           // consumed (covers all close_all legs this bar)
+    prevClosed   := strategy.closedtrades
+
+// BUY CE / BUY PE at the entry fill (one per entry, regardless of later partials)
+if newTradeOpened
+    oi    = strategy.opentrades - 1
+    obar  = strategy.opentrades.entry_bar_index(oi)
+    opx   = strategy.opentrades.entry_price(oi)
+    oLong = strategy.opentrades.size(oi) > 0
+    label.new(obar, opx, oLong ? "BUY CE" : "BUY PE", xloc = xloc.bar_index,
+         style     = oLong ? label.style_label_up : label.style_label_down,
+         color     = oLong ? color.new(color.green, 0) : color.new(color.red, 0),
+         textcolor = color.white, size = size.small,
+         tooltip   = (oLong ? "BUY CE @ " : "BUY PE @ ") + str.tostring(opx, format.mintick))
+
+// live stop & target lines (single pair; recreated each in-position bar, deleted flat).
+// Shows the ACTIVE levels: runner -> runnerStop + firstTgt; fixed -> stop + 2R target.
+liveStopLvl = inUseRunner ? runnerStop : initStop
+liveTgtLvl  = inUseRunner ? firstTgtPx : targetPx
+var line stopLn = na
+var line tgtLn  = na
+if inPos
+    line.delete(stopLn)
+    line.delete(tgtLn)
+    stopLn := line.new(entryBarIdx, liveStopLvl, bar_index, liveStopLvl, xloc = xloc.bar_index, color = color.new(color.red,   0), style = line.style_dashed, width = 1)
+    tgtLn  := line.new(entryBarIdx, liveTgtLvl,  bar_index, liveTgtLvl,  xloc = xloc.bar_index, color = color.new(color.green, 0), style = line.style_dashed, width = 1)
+else
+    line.delete(stopLn)
+    line.delete(tgtLn)
+    stopLn := na
+    tgtLn  := na
+
+// --- exit-reason breakdown panel (debug): count + avg R per exit door ---
+var table exitT = na
+if inShowDebug and barstate.islast
+    if na(exitT)
+        exitT := table.new(position.bottom_right, 3, 6, border_width = 1)
+    table.cell(exitT, 0, 0, "EXIT",        bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exitT, 1, 0, "N",           bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exitT, 2, 0, "avgR",        bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exitT, 0, 1, "firstTgt",    text_size = size.small)
+    table.cell(exitT, 1, 1, str.tostring(cntFirstTgt), text_size = size.small)
+    table.cell(exitT, 2, 1, cntFirstTgt > 0 ? str.tostring(sumRFirstTgt / cntFirstTgt, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 2, "runnerTrail", text_size = size.small)
+    table.cell(exitT, 1, 2, str.tostring(cntRunner), text_size = size.small)
+    table.cell(exitT, 2, 2, cntRunner > 0 ? str.tostring(sumRRunner / cntRunner, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 3, "stop",        text_size = size.small)
+    table.cell(exitT, 1, 3, str.tostring(cntStop), text_size = size.small)
+    table.cell(exitT, 2, 3, cntStop > 0 ? str.tostring(sumRStop / cntStop, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 4, "time",        text_size = size.small)
+    table.cell(exitT, 1, 4, str.tostring(cntTime), text_size = size.small)
+    table.cell(exitT, 2, 4, cntTime > 0 ? str.tostring(sumRTime / cntTime, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 5, "flip",        text_size = size.small)
+    table.cell(exitT, 1, 5, str.tostring(cntFlip), text_size = size.small)
+    table.cell(exitT, 2, 5, cntFlip > 0 ? str.tostring(sumRFlip / cntFlip, "#.##") : "-", text_size = size.small)
+else if not inShowDebug and not na(exitT)
+    table.delete(exitT)
+    exitT := na
+
+// --- MFE distribution panel (debug): how far entries ran in favor (R), ignoring
+//     the 2R target. Cumulative survival buckets + avg MAE. ---
+var table mfeT = na
+if inShowDebug and barstate.islast
+    if na(mfeT)
+        mfeT := table.new(position.bottom_left, 3, 8, border_width = 1)
+    table.cell(mfeT, 0, 0, "MFE",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 1, 0, "N",     bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 2, 0, "%",     bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 0, 1, ">=1R",  text_size = size.small)
+    table.cell(mfeT, 1, 1, str.tostring(mfeGe1), text_size = size.small)
+    table.cell(mfeT, 2, 1, mfeN > 0 ? str.tostring(100.0 * mfeGe1 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 2, ">=2R",  text_size = size.small)
+    table.cell(mfeT, 1, 2, str.tostring(mfeGe2), text_size = size.small)
+    table.cell(mfeT, 2, 2, mfeN > 0 ? str.tostring(100.0 * mfeGe2 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 3, ">=3R",  text_size = size.small)
+    table.cell(mfeT, 1, 3, str.tostring(mfeGe3), text_size = size.small)
+    table.cell(mfeT, 2, 3, mfeN > 0 ? str.tostring(100.0 * mfeGe3 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 4, ">=4R",  text_size = size.small)
+    table.cell(mfeT, 1, 4, str.tostring(mfeGe4), text_size = size.small)
+    table.cell(mfeT, 2, 4, mfeN > 0 ? str.tostring(100.0 * mfeGe4 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 5, ">=5R",  text_size = size.small)
+    table.cell(mfeT, 1, 5, str.tostring(mfeGe5), text_size = size.small)
+    table.cell(mfeT, 2, 5, mfeN > 0 ? str.tostring(100.0 * mfeGe5 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 6, "N tot", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 1, 6, str.tostring(mfeN), bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 2, 6, "", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 0, 7, "avg MAE", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 1, 7, mfeN > 0 ? str.tostring(mfeSumAdv / mfeN, "#.##") + "R" : "-", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 2, 7, "", bgcolor = color.new(color.teal, 60), text_size = size.small)
+else if not inShowDebug and not na(mfeT)
+    table.delete(mfeT)
+    mfeT := na
+
+// --- ENTRY-FUNNEL diagnostic (debug): cumulative bar-counts per sub-condition, so
+//     we can see exactly where the AND-stack collapses to zero. Counts EVERY bar
+//     (na warmup guarded via nz). CE/long funnel + both bias + the full PE signal. ---
+var int fExtL = 0   // extended below mean (CE) alone
+var int fRsi  = 0   // RSI oversold (CE) alone
+var int fConf = 0   // bullish reversal bar (CE) alone
+var int fAdxB = 0   // ADX guard would block (too trendy)
+var int fSet  = 0   // setup = ext AND rsi-oversold (CE), pre-confirm
+var int fFull = 0   // windowed CE trigger (ext+rsi -> confirm in window), pre-GATE3
+var int fFullS = 0  // windowed PE trigger, pre-GATE3
+fExtL += nz(extLong ? 1 : 0)
+fRsi  += nz(rsiOsLong ? 1 : 0)
+fConf += nz(confirmLong ? 1 : 0)
+fAdxB += nz(adxBlock ? 1 : 0)
+fSet  += nz(setupLong ? 1 : 0)
+fFull += nz(trigLong ? 1 : 0)
+fFullS += nz(trigShort ? 1 : 0)
+
+var table funT = na
+if inShowDebug and barstate.islast
+    if na(funT)
+        funT := table.new(position.middle_left, 2, 8, border_width = 1)
+    table.cell(funT, 0, 0, "FUNNEL (bars)", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 1, 0, "N",             bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 0, 1, "ext below (CE)",text_size = size.small)
+    table.cell(funT, 1, 1, str.tostring(fExtL), text_size = size.small)
+    table.cell(funT, 0, 2, "rsi oversold",  text_size = size.small)
+    table.cell(funT, 1, 2, str.tostring(fRsi),  text_size = size.small)
+    table.cell(funT, 0, 3, "confirm bull",  text_size = size.small)
+    table.cell(funT, 1, 3, str.tostring(fConf), text_size = size.small)
+    table.cell(funT, 0, 4, "setup ext+rsi", text_size = size.small)
+    table.cell(funT, 1, 4, str.tostring(fSet),  text_size = size.small)
+    table.cell(funT, 0, 5, "ADX would block",text_size = size.small)
+    table.cell(funT, 1, 5, str.tostring(fAdxB), text_size = size.small)
+    table.cell(funT, 0, 6, "FULL CE (win)", bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 1, 6, str.tostring(fFull), bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 0, 7, "FULL PE (win)", bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 1, 7, str.tostring(fFullS), bgcolor = color.new(color.orange, 35), text_size = size.small)
+else if not inShowDebug and not na(funT)
+    table.delete(funT)
+    funT := na
+
+// =============================================================================
+// === 8. ALERTS ===
+// Both mechanisms for all four events:
+//  - alertcondition(): static messages (must be const) for manual UI alerts; use
+//    {{ }} placeholders since they cannot read inputs.
+//  - alert(): dynamic runtime messages tagged with inAlertTag + price + reason.
+// Entry alerts fire on the signal bar (= the fill bar under process_orders_on_close).
+// Exit alerts fire when the engine reports the closed trade — the bar AFTER the fill —
+// because the exit reason (stop/target/time/flip) is only known once filled; the
+// message still carries the true fill price + reason. alert.freq_once_per_bar_close
+// keeps every alert on a CONFIRMED bar -> non-repaint.
+// =============================================================================
+exitCe = newTradeClosed and exitLong          // a long (CE) trade closed
+exitPe = newTradeClosed and not exitLong      // a short (PE) trade closed
+
+alertcondition(enterLong,  title = "BUY CE",  message = "BUY CE (long) on {{ticker}} @ {{close}}")
+alertcondition(enterShort, title = "BUY PE",  message = "BUY PE (short) on {{ticker}} @ {{close}}")
+alertcondition(exitCe,     title = "EXIT CE", message = "EXIT CE (long close) on {{ticker}} @ {{close}}")
+alertcondition(exitPe,     title = "EXIT PE", message = "EXIT PE (short close) on {{ticker}} @ {{close}}")
+
+if enterLong
+    alert(inAlertTag + " | BUY CE @ " + str.tostring(close, format.mintick) + " | entry", alert.freq_once_per_bar_close)
+if enterShort
+    alert(inAlertTag + " | BUY PE @ " + str.tostring(close, format.mintick) + " | entry", alert.freq_once_per_bar_close)
+if exitCe
+    alert(inAlertTag + " | EXIT CE @ " + str.tostring(exitPx, format.mintick) + " | " + exitReason, alert.freq_once_per_bar_close)
+if exitPe
+    alert(inAlertTag + " | EXIT PE @ " + str.tostring(exitPx, format.mintick) + " | " + exitReason, alert.freq_once_per_bar_close)
