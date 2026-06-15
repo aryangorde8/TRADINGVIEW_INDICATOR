@@ -26,10 +26,10 @@ strategy(
      title                   = "NIFTY FUT 5m — Options Directional (A: breakout)",
      shorttitle              = "NF5m-A",
      overlay                 = true,
-     pyramiding              = 1,                              // one position at a time (pyramiding is MAX entries in a direction; 0 would block ALL entries)
+     pyramiding              = 0,                              // one position at a time (0 is the default; it allows the FIRST entry, only blocks adding to it)
      calc_on_every_tick      = false,                         // evaluate on bar data, not ticks
      process_orders_on_close = true,                          // fills modelled at bar close (anti-repaint friendly)
-     initial_capital         = 100000,                        // INR 1,00,000 nominal
+     initial_capital         = 10000000,                      // INR 1 crore — enough to fund 1 NIFTY1! contract at any point value (R is in points, unaffected)
      default_qty_type        = strategy.fixed,                // fixed contracts so R is comparable across runs
      default_qty_value       = 1,                             // 1 futures contract
      commission_type         = strategy.commission.percent,   // mild realistic cost proxy
