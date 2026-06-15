@@ -307,14 +307,22 @@ plot((inShowBiasRef and not isNewDay) ? biasRefPrice : na, "Bias ref", color = c
 bgcolor(inShowSessionBg and inSession ? color.new(color.blue, 92) : na, title = "Session shade")
 
 // --- on-chart signal markers (DEBUG visualization only; inShowSignals, default off) ---
-// Faint circles = RAW pre-gate breakout; solid triangles = final gated signal. The
-// gap between them is what the gates filter out. NON-REPAINT: historical bars are
-// fixed; only the live forming bar can flicker and settles at close. These markers
-// have NO effect on orders (there are none yet).
-plotshape(inShowSignals and breakoutLong,  title = "raw breakoutLong",  style = shape.circle,       location = location.belowbar, color = color.new(color.green,  70), size = size.tiny)
-plotshape(inShowSignals and breakoutShort, title = "raw breakoutShort", style = shape.circle,       location = location.abovebar, color = color.new(color.maroon, 70), size = size.tiny)
-plotshape(inShowSignals and sigLong,       title = "sig Long",          style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime,    0), size = size.tiny)
-plotshape(inShowSignals and sigShort,      title = "sig Short",         style = shape.triangledown, location = location.abovebar, color = color.new(color.red,     0), size = size.tiny)
+// Three layers disambiguate the gate funnel:
+//   faint circle   = RAW pre-gate breakout (trigger fired)
+//   orange X-cross = context-only reject: trigger + bias passed, killed by GATE 3
+//   solid triangle = final signal: passed ALL gates
+// => a circle with NEITHER an X nor a triangle was killed by bias (GATE 1).
+// In breakout mode trigLong/Short == breakoutLong/Short, so the three layers exactly
+// partition the dots. NON-REPAINT: historical bars fixed; the live bar may flicker
+// and settles at close. No effect on orders (there are none).
+ctxRejectLong  = trigLong  and longBias  and gate3Block   // would-be long entry blocked by context only
+ctxRejectShort = trigShort and shortBias and gate3Block   // would-be short entry blocked by context only
+plotshape(inShowSignals and breakoutLong,   title = "raw breakoutLong",  style = shape.circle,       location = location.belowbar, color = color.new(color.green,  70), size = size.tiny)
+plotshape(inShowSignals and breakoutShort,  title = "raw breakoutShort", style = shape.circle,       location = location.abovebar, color = color.new(color.maroon, 70), size = size.tiny)
+plotshape(inShowSignals and ctxRejectLong,  title = "ctx-reject Long",   style = shape.xcross,       location = location.belowbar, color = color.new(color.orange, 0), size = size.tiny)
+plotshape(inShowSignals and ctxRejectShort, title = "ctx-reject Short",  style = shape.xcross,       location = location.abovebar, color = color.new(color.orange, 0), size = size.tiny)
+plotshape(inShowSignals and sigLong,        title = "sig Long",          style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime,    0), size = size.tiny)
+plotshape(inShowSignals and sigShort,       title = "sig Short",         style = shape.triangledown, location = location.abovebar, color = color.new(color.red,     0), size = size.tiny)
 
 // --- debug series -> Data Window only (no chart clutter), gated by toggle ---
 plot(inShowDebug ? biasRefPrice                : na, "dbg biasRef",    display = display.data_window)
