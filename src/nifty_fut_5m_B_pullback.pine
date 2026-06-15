@@ -402,33 +402,36 @@ var int   mfeGe5 = 0                             //                          >= 
 var float mfeSumAdv = 0.0                        // sum of max adverse excursion (R)
 
 // 1) advance existing shadows on THIS bar's high/low; terminate on -1R stop or 15:15.
-//    Iterate downward so array.remove() is safe.
-if array.size(mfeEntry) > 0
-    for i = array.size(mfeEntry) - 1 to 0 by -1
-        e   = array.get(mfeEntry, i)
-        rp  = array.get(mfeRpts, i)
-        stp = array.get(mfeStop, i)
-        dir = array.get(mfeDir, i)
-        favR = dir == 1 ? (high - e) / rp : (e - low) / rp
-        advR = dir == 1 ? (e - low) / rp : (high - e) / rp
-        array.set(mfeMaxF, i, math.max(array.get(mfeMaxF, i), favR))
-        array.set(mfeMaxA, i, math.max(array.get(mfeMaxA, i), advR))
-        stopHit = dir == 1 ? low <= stp : high >= stp
-        if stopHit or inFlatWindow
-            mx = array.get(mfeMaxF, i)
-            mfeN   += 1
-            mfeGe1 += mx >= 1.0 ? 1 : 0
-            mfeGe2 += mx >= 2.0 ? 1 : 0
-            mfeGe3 += mx >= 3.0 ? 1 : 0
-            mfeGe4 += mx >= 4.0 ? 1 : 0
-            mfeGe5 += mx >= 5.0 ? 1 : 0
-            mfeSumAdv += array.get(mfeMaxA, i)
-            array.remove(mfeEntry, i)
-            array.remove(mfeRpts, i)
-            array.remove(mfeStop, i)
-            array.remove(mfeDir, i)
-            array.remove(mfeMaxF, i)
-            array.remove(mfeMaxA, i)
+//    while-loop with manual index: on removal, DON'T advance i (the next element
+//    shifts into i). Pine forbids a negative 'for' step, so this is the safe pattern.
+int mfeI = 0
+while mfeI < array.size(mfeEntry)
+    e   = array.get(mfeEntry, mfeI)
+    rp  = array.get(mfeRpts, mfeI)
+    stp = array.get(mfeStop, mfeI)
+    dir = array.get(mfeDir, mfeI)
+    favR = dir == 1 ? (high - e) / rp : (e - low) / rp
+    advR = dir == 1 ? (e - low) / rp : (high - e) / rp
+    array.set(mfeMaxF, mfeI, math.max(array.get(mfeMaxF, mfeI), favR))
+    array.set(mfeMaxA, mfeI, math.max(array.get(mfeMaxA, mfeI), advR))
+    stopHit = dir == 1 ? low <= stp : high >= stp
+    if stopHit or inFlatWindow
+        mx = array.get(mfeMaxF, mfeI)
+        mfeN   += 1
+        mfeGe1 += mx >= 1.0 ? 1 : 0
+        mfeGe2 += mx >= 2.0 ? 1 : 0
+        mfeGe3 += mx >= 3.0 ? 1 : 0
+        mfeGe4 += mx >= 4.0 ? 1 : 0
+        mfeGe5 += mx >= 5.0 ? 1 : 0
+        mfeSumAdv += array.get(mfeMaxA, mfeI)
+        array.remove(mfeEntry, mfeI)
+        array.remove(mfeRpts, mfeI)
+        array.remove(mfeStop, mfeI)
+        array.remove(mfeDir, mfeI)
+        array.remove(mfeMaxF, mfeI)
+        array.remove(mfeMaxA, mfeI)
+    else
+        mfeI += 1
 // 2) register a shadow for an entry that fired THIS bar (it starts accruing next bar)
 if (enterLong or enterShort) and not na(rVal) and rVal > 0
     array.push(mfeEntry, close)
