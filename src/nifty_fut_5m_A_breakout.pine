@@ -112,6 +112,9 @@ inShowEmas      = input.bool(true,  "Show EMAs", group = GRP_DISPLAY,
      tooltip = "Plot emaFast / emaSlow for visual context.")
 inShowBiasRef   = input.bool(true,  "Show bias reference", group = GRP_DISPLAY,
      tooltip = "Plot the resolved bias reference (VWAP or SessionAvg).")
+inShowSignals   = input.bool(false, "Show signal markers (debug)", group = GRP_DISPLAY,
+     tooltip = "On-chart DEBUG markers: solid triangles = final gated signals (sigLong below bar / sigShort above bar); " +
+       "faint circles = RAW pre-gate breakout triggers (before bias/GATE3). Visualization ONLY — does not affect orders.")
 inShowSessionBg = input.bool(false, "Shade trading session", group = GRP_DISPLAY,
      tooltip = "Tint the background during the trading session window.")
 inShowDebug     = input.bool(false, "Show debug panel + data-window series", group = GRP_DISPLAY,
@@ -302,6 +305,16 @@ plot(inShowEmas ? emaSlow : na, "EMA slow", color = color.new(color.orange, 0), 
 plot((inShowBiasRef and not isNewDay) ? biasRefPrice : na, "Bias ref", color = color.new(color.fuchsia, 0), linewidth = 2)
 
 bgcolor(inShowSessionBg and inSession ? color.new(color.blue, 92) : na, title = "Session shade")
+
+// --- on-chart signal markers (DEBUG visualization only; inShowSignals, default off) ---
+// Faint circles = RAW pre-gate breakout; solid triangles = final gated signal. The
+// gap between them is what the gates filter out. NON-REPAINT: historical bars are
+// fixed; only the live forming bar can flicker and settles at close. These markers
+// have NO effect on orders (there are none yet).
+plotshape(inShowSignals and breakoutLong,  title = "raw breakoutLong",  style = shape.circle,       location = location.belowbar, color = color.new(color.green,  70), size = size.tiny)
+plotshape(inShowSignals and breakoutShort, title = "raw breakoutShort", style = shape.circle,       location = location.abovebar, color = color.new(color.maroon, 70), size = size.tiny)
+plotshape(inShowSignals and sigLong,       title = "sig Long",          style = shape.triangleup,   location = location.belowbar, color = color.new(color.lime,    0), size = size.tiny)
+plotshape(inShowSignals and sigShort,      title = "sig Short",         style = shape.triangledown, location = location.abovebar, color = color.new(color.red,     0), size = size.tiny)
 
 // --- debug series -> Data Window only (no chart clutter), gated by toggle ---
 plot(inShowDebug ? biasRefPrice                : na, "dbg biasRef",    display = display.data_window)
