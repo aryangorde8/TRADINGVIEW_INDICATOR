@@ -102,6 +102,8 @@ inRsiDipLevel = input.float(50.0, "RSI dip level (uptrend buy)", minval = 1.0, m
      tooltip = "In an UPTREND, RSI <= this = momentum has COOLED TO NEUTRAL (a pullback). Default 50 — NOT 40: in a trend RSI rarely reaches oversold, a pullback only cools it to ~mid. [edge param]")
 inRsiRipLevel = input.float(50.0, "RSI rip level (downtrend sell)", minval = 1.0, maxval = 99.0, step = 1.0, group = GRP_TRIGGER,
      tooltip = "In a DOWNTREND, RSI >= this = momentum cooled to neutral (a rip to sell). Default 50 (mirror of the dip level; config).")
+inConfirmWin  = input.int(2, "Confirm window (bars)", minval = 0, group = GRP_TRIGGER,
+     tooltip = "After a pullback (tag+RSI) arms, the reversal-confirm bar may appear on the same bar OR within this many following bars while bias holds. Default 2. 0 = same-bar only (the old strict behaviour). Config.")
 
 // --- Risk: structural stop (below pullback swing) + target (GATE 3 + exits) ---
 inAtrLen       = input.int(14, "ATR length", minval = 1, group = GRP_RISK,
@@ -305,8 +307,21 @@ pbCondShort = switch inEntryMode
     "ema_tag"      => emaTagShort
     "rsi_pullback" => rsiRipShort
     => emaTagShort and rsiRipShort
-trigLong  = confirmLong  and pbCondLong
-trigShort = confirmShort and pbCondShort
+
+// 2-bar confirm WINDOW: the pullback (setup = bias + pbCond, WITHOUT confirm) arms a
+// counter; the reversal-confirm bar then fires the entry on the setup bar itself OR
+// within the next inConfirmWin bars while bias still holds (disarm otherwise / on fire).
+// Non-repaint: setup/confirm/bias are each read on their own CONFIRMED bar close, and
+// armLong is a plain var counter using the PRIOR bar's value -> no lookahead. Entry
+// fills at the confirm bar's close (process_orders_on_close).
+setupLong  = longBias  and pbCondLong
+setupShort = shortBias and pbCondShort
+var int armLong  = 0
+var int armShort = 0
+trigLong  = longBias  and confirmLong  and (setupLong  or armLong  > 0)
+trigShort = shortBias and confirmShort and (setupShort or armShort > 0)
+armLong  := trigLong  ? 0 : setupLong  ? inConfirmWin : (armLong  > 0 and longBias)  ? armLong  - 1 : 0
+armShort := trigShort ? 0 : setupShort ? inConfirmWin : (armShort > 0 and shortBias) ? armShort - 1 : 0
 
 // --- GATE 3: context block (any true => no entry) ---
 // Non-repaint: session/entry windows come from time() (fixed per bar), afterOpenNoise
@@ -809,8 +824,8 @@ fRsi  += nz(rsiDipLong ? 1 : 0)
 fConf += nz(confirmLong ? 1 : 0)
 fBE   += nz((longBias and emaTagLong) ? 1 : 0)
 fBER  += nz((longBias and emaTagLong and rsiDipLong) ? 1 : 0)
-fFull += nz((longBias and emaTagLong and rsiDipLong and confirmLong) ? 1 : 0)
-fFullS += nz((shortBias and emaTagShort and rsiRipShort and confirmShort) ? 1 : 0)
+fFull += nz(trigLong ? 1 : 0)     // windowed entry trigger (pre-GATE3) — the real signal
+fFullS += nz(trigShort ? 1 : 0)
 
 var table funT = na
 if inShowDebug and barstate.islast
@@ -832,9 +847,9 @@ if inShowDebug and barstate.islast
     table.cell(funT, 1, 6, str.tostring(fBE),   text_size = size.small)
     table.cell(funT, 0, 7, "bias+ema+rsi",  text_size = size.small)
     table.cell(funT, 1, 7, str.tostring(fBER),  text_size = size.small)
-    table.cell(funT, 0, 8, "FULL CE (all)", bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 0, 8, "FULL CE (win)", bgcolor = color.new(color.orange, 35), text_size = size.small)
     table.cell(funT, 1, 8, str.tostring(fFull), bgcolor = color.new(color.orange, 35), text_size = size.small)
-    table.cell(funT, 0, 9, "FULL PE (all)", bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 0, 9, "FULL PE (win)", bgcolor = color.new(color.orange, 35), text_size = size.small)
     table.cell(funT, 1, 9, str.tostring(fFullS), bgcolor = color.new(color.orange, 35), text_size = size.small)
 else if not inShowDebug and not na(funT)
     table.delete(funT)
