@@ -382,6 +382,62 @@ if inPos
 timeExit = inPos and inFlatWindow
 flipExit = inPos and ((posDir == 1 and oppShortRaw) or (posDir == -1 and oppLongRaw))
 
+// --- MFE / MAE INSTRUMENTATION (measurement only — NO effect on trading) ---
+// To see how far winners WOULD run if not capped at the 2R target, shadow each entry
+// from its fill and track max favorable / adverse excursion in R, IGNORING the target,
+// until the -1R stop or the 15:15 time-stop. Concurrent live entries held in arrays.
+// Pure measurement: no strategy.* calls here; the actual strategy still exits at 2R.
+var array<float> mfeEntry = array.new_float()   // entry price per live shadow
+var array<float> mfeRpts  = array.new_float()   // R (points) per shadow
+var array<float> mfeStop  = array.new_float()   // -1R stop level per shadow
+var array<int>   mfeDir   = array.new_int()     // 1 long / -1 short
+var array<float> mfeMaxF  = array.new_float()   // running max favorable excursion (R)
+var array<float> mfeMaxA  = array.new_float()   // running max adverse  excursion (R)
+var int   mfeN   = 0                            // finalized shadows
+var int   mfeGe1 = 0                             // cumulative: MFE reached >= 1R
+var int   mfeGe2 = 0                             //                          >= 2R
+var int   mfeGe3 = 0                             //                          >= 3R
+var int   mfeGe4 = 0                             //                          >= 4R
+var int   mfeGe5 = 0                             //                          >= 5R
+var float mfeSumAdv = 0.0                        // sum of max adverse excursion (R)
+
+// 1) advance existing shadows on THIS bar's high/low; terminate on -1R stop or 15:15.
+//    Iterate downward so array.remove() is safe.
+if array.size(mfeEntry) > 0
+    for i = array.size(mfeEntry) - 1 to 0 by -1
+        e   = array.get(mfeEntry, i)
+        rp  = array.get(mfeRpts, i)
+        stp = array.get(mfeStop, i)
+        dir = array.get(mfeDir, i)
+        favR = dir == 1 ? (high - e) / rp : (e - low) / rp
+        advR = dir == 1 ? (e - low) / rp : (high - e) / rp
+        array.set(mfeMaxF, i, math.max(array.get(mfeMaxF, i), favR))
+        array.set(mfeMaxA, i, math.max(array.get(mfeMaxA, i), advR))
+        stopHit = dir == 1 ? low <= stp : high >= stp
+        if stopHit or inFlatWindow
+            mx = array.get(mfeMaxF, i)
+            mfeN   += 1
+            mfeGe1 += mx >= 1.0 ? 1 : 0
+            mfeGe2 += mx >= 2.0 ? 1 : 0
+            mfeGe3 += mx >= 3.0 ? 1 : 0
+            mfeGe4 += mx >= 4.0 ? 1 : 0
+            mfeGe5 += mx >= 5.0 ? 1 : 0
+            mfeSumAdv += array.get(mfeMaxA, i)
+            array.remove(mfeEntry, i)
+            array.remove(mfeRpts, i)
+            array.remove(mfeStop, i)
+            array.remove(mfeDir, i)
+            array.remove(mfeMaxF, i)
+            array.remove(mfeMaxA, i)
+// 2) register a shadow for an entry that fired THIS bar (it starts accruing next bar)
+if (enterLong or enterShort) and not na(rVal) and rVal > 0
+    array.push(mfeEntry, close)
+    array.push(mfeRpts, rVal)
+    array.push(mfeStop, initStop)
+    array.push(mfeDir, enterLong ? 1 : -1)
+    array.push(mfeMaxF, 0.0)
+    array.push(mfeMaxA, 0.0)
+
 // =============================================================================
 // === 6. ORDERS ===
 // Entry: long = CE bias, short = PE bias. Exit: ONE OCO bracket (stop+limit linked)
@@ -629,6 +685,40 @@ if inShowDebug and barstate.islast
 else if not inShowDebug and not na(exitT)
     table.delete(exitT)
     exitT := na
+
+// --- MFE distribution panel (debug): how far entries ran in favor (R), ignoring
+//     the 2R target. Cumulative survival buckets + avg MAE. ---
+var table mfeT = na
+if inShowDebug and barstate.islast
+    if na(mfeT)
+        mfeT := table.new(position.bottom_left, 3, 8, border_width = 1)
+    table.cell(mfeT, 0, 0, "MFE",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 1, 0, "N",     bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 2, 0, "%",     bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 0, 1, ">=1R",  text_size = size.small)
+    table.cell(mfeT, 1, 1, str.tostring(mfeGe1), text_size = size.small)
+    table.cell(mfeT, 2, 1, mfeN > 0 ? str.tostring(100.0 * mfeGe1 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 2, ">=2R",  text_size = size.small)
+    table.cell(mfeT, 1, 2, str.tostring(mfeGe2), text_size = size.small)
+    table.cell(mfeT, 2, 2, mfeN > 0 ? str.tostring(100.0 * mfeGe2 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 3, ">=3R",  text_size = size.small)
+    table.cell(mfeT, 1, 3, str.tostring(mfeGe3), text_size = size.small)
+    table.cell(mfeT, 2, 3, mfeN > 0 ? str.tostring(100.0 * mfeGe3 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 4, ">=4R",  text_size = size.small)
+    table.cell(mfeT, 1, 4, str.tostring(mfeGe4), text_size = size.small)
+    table.cell(mfeT, 2, 4, mfeN > 0 ? str.tostring(100.0 * mfeGe4 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 5, ">=5R",  text_size = size.small)
+    table.cell(mfeT, 1, 5, str.tostring(mfeGe5), text_size = size.small)
+    table.cell(mfeT, 2, 5, mfeN > 0 ? str.tostring(100.0 * mfeGe5 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 6, "N tot", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 1, 6, str.tostring(mfeN), bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 2, 6, "", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 0, 7, "avg MAE", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 1, 7, mfeN > 0 ? str.tostring(mfeSumAdv / mfeN, "#.##") + "R" : "-", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 2, 7, "", bgcolor = color.new(color.teal, 60), text_size = size.small)
+else if not inShowDebug and not na(mfeT)
+    table.delete(mfeT)
+    mfeT := na
 
 // =============================================================================
 // === 8. ALERTS ===
