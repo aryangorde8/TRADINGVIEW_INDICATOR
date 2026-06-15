@@ -104,6 +104,8 @@ inMaxAtr       = input.float(0.0, "Max ATR (skip whipsaw, 0=off)", minval = 0.0,
      tooltip = "Optional: block entries when ATR > this (news whipsaw). 0 = disabled.")
 inUseStructStop = input.bool(true, "Use structural stop", group = GRP_RISK,
      tooltip = "If on, the stop is the WIDER of (atrMult*ATR) and the trigger-bar extreme, giving structure room.")
+inUseTrail     = input.bool(false, "Use trailing stop", group = GRP_RISK,
+     tooltip = "OFF (default) = FIXED bracket: the stop stays at the initial stop for the life of the trade, so the clean 1:2 (initStop / 2R target) is what trades. ON = breakeven+ATR trail armed at +R (see below). Default OFF = baseline to measure raw entry edge without trail contamination.")
 inArmTrailR    = input.float(1.0, "Trail arms at +R", minval = 0.1, step = 0.1, group = GRP_RISK,
      tooltip = "Once price reaches +N*R, stop moves to breakeven then trails by atrMult*ATR. Default 1.0 (=+1R).")
 
@@ -341,17 +343,19 @@ if enterShort
 
 inPos = strategy.position_size != 0
 
-// --- trail: arm at +armR*R -> breakeven, then ratchet by atrMult*ATR ---
+// --- trail (ONLY when inUseTrail): arm at +armR*R -> breakeven, then ratchet by
+// atrMult*ATR. When inUseTrail is OFF (default), this block is skipped and trailStop
+// stays = initStop for the trade's life -> clean fixed bracket.
 // Non-repaint: uses THIS bar's completed high/low/close; the new stop is applied via
 // strategy.exit and only checked on SUBSEQUENT bars -> no same-bar lookahead. R>0
 // guards a degenerate stop.
-if inPos and posDir == 1 and rVal > 0
+if inUseTrail and inPos and posDir == 1 and rVal > 0
     if not trailArmed and high >= entryPx + inArmTrailR * rVal
         trailArmed := true
         trailStop  := math.max(trailStop, entryPx)                     // -> breakeven
     if trailArmed
         trailStop  := math.max(trailStop, close - inAtrMult * atrVal)  // ratchet up only
-if inPos and posDir == -1 and rVal > 0
+if inUseTrail and inPos and posDir == -1 and rVal > 0
     if not trailArmed and low <= entryPx - inArmTrailR * rVal
         trailArmed := true
         trailStop  := math.min(trailStop, entryPx)                     // -> breakeven
@@ -390,10 +394,12 @@ if enterShort
 // is fixed at rrTarget*R. Non-repaint: levels are completed-bar values; orders fill
 // on later bars (or this bar's close for the close_all path).
 bracketActive = inPos or enterLong or enterShort
+// Stop leg = trailStop only when the trail is on; otherwise the FIXED initStop for
+// the life of the trade (Option-0 baseline). Limit leg is always the 2R target.
 if bracketActive and posDir == 1
-    strategy.exit("Bracket", from_entry = "Long",  stop = trailStop, limit = targetPx)
+    strategy.exit("Bracket", from_entry = "Long",  stop = inUseTrail ? trailStop : initStop, limit = targetPx)
 else if bracketActive and posDir == -1
-    strategy.exit("Bracket", from_entry = "Short", stop = trailStop, limit = targetPx)
+    strategy.exit("Bracket", from_entry = "Short", stop = inUseTrail ? trailStop : initStop, limit = targetPx)
 
 // Time-stop / flip: market close at this bar's close (process_orders_on_close).
 // pendingReason tags the close so rendering can show the correct reason.
