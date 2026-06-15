@@ -98,10 +98,10 @@ inPullbackAtr = input.float(0.25, "EMA-tag tolerance (ATR)", minval = 0.0, step 
      tooltip = "How close (in ATR units) the bar's low/high must come to emaFast to count as an EMA tag. Default 0.25. [edge param]")
 inRsiLen      = input.int(14, "RSI length", minval = 2, group = GRP_TRIGGER,
      tooltip = "RSI period for the pullback test. Default 14 (config, not an edge param).")
-inRsiDipLevel = input.float(40.0, "RSI dip level (uptrend buy)", minval = 1.0, maxval = 99.0, step = 1.0, group = GRP_TRIGGER,
-     tooltip = "In an UPTREND, RSI <= this = a pullback (NOT a deep oversold). Default 40. [edge param]")
-inRsiRipLevel = input.float(60.0, "RSI rip level (downtrend sell)", minval = 1.0, maxval = 99.0, step = 1.0, group = GRP_TRIGGER,
-     tooltip = "In a DOWNTREND, RSI >= this = a rip to sell. Default 60 (mirror of the dip level; config).")
+inRsiDipLevel = input.float(50.0, "RSI dip level (uptrend buy)", minval = 1.0, maxval = 99.0, step = 1.0, group = GRP_TRIGGER,
+     tooltip = "In an UPTREND, RSI <= this = momentum has COOLED TO NEUTRAL (a pullback). Default 50 — NOT 40: in a trend RSI rarely reaches oversold, a pullback only cools it to ~mid. [edge param]")
+inRsiRipLevel = input.float(50.0, "RSI rip level (downtrend sell)", minval = 1.0, maxval = 99.0, step = 1.0, group = GRP_TRIGGER,
+     tooltip = "In a DOWNTREND, RSI >= this = momentum cooled to neutral (a rip to sell). Default 50 (mirror of the dip level; config).")
 
 // --- Risk: structural stop (below pullback swing) + target (GATE 3 + exits) ---
 inAtrLen       = input.int(14, "ATR length", minval = 1, group = GRP_RISK,
