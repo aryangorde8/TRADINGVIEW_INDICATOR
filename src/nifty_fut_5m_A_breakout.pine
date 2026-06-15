@@ -26,7 +26,7 @@ strategy(
      title                   = "NIFTY FUT 5m — Options Directional (A: breakout)",
      shorttitle              = "NF5m-A",
      overlay                 = true,
-     pyramiding              = 0,                              // one position at a time
+     pyramiding              = 1,                              // one position at a time (pyramiding is MAX entries in a direction; 0 would block ALL entries)
      calc_on_every_tick      = false,                         // evaluate on bar data, not ticks
      process_orders_on_close = true,                          // fills modelled at bar close (anti-repaint friendly)
      initial_capital         = 100000,                        // INR 1,00,000 nominal
