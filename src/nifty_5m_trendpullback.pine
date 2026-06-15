@@ -790,6 +790,56 @@ else if not inShowDebug and not na(mfeT)
     table.delete(mfeT)
     mfeT := na
 
+// --- ENTRY-FUNNEL diagnostic (debug): cumulative bar-counts per sub-condition, so
+//     we can see exactly where the AND-stack collapses to zero. Counts EVERY bar
+//     (na warmup guarded via nz). CE/long funnel + both bias + the full PE signal. ---
+var int fUp   = 0   // uptrend bias alone
+var int fDn   = 0   // downtrend bias alone
+var int fEma  = 0   // EMA-tag pullback (long) alone
+var int fRsi  = 0   // RSI-dip (long) alone
+var int fConf = 0   // reversal-confirm bar (long) alone
+var int fBE   = 0   // bias AND ema-tag
+var int fBER  = 0   // bias AND ema-tag AND rsi
+var int fFull = 0   // bias AND ema-tag AND rsi AND confirm  (= both_required CE signal, pre-GATE3)
+var int fFullS = 0  // mirror: full PE signal (pre-GATE3)
+fUp   += nz(longBias  ? 1 : 0)
+fDn   += nz(shortBias ? 1 : 0)
+fEma  += nz(emaTagLong ? 1 : 0)
+fRsi  += nz(rsiDipLong ? 1 : 0)
+fConf += nz(confirmLong ? 1 : 0)
+fBE   += nz((longBias and emaTagLong) ? 1 : 0)
+fBER  += nz((longBias and emaTagLong and rsiDipLong) ? 1 : 0)
+fFull += nz((longBias and emaTagLong and rsiDipLong and confirmLong) ? 1 : 0)
+fFullS += nz((shortBias and emaTagShort and rsiRipShort and confirmShort) ? 1 : 0)
+
+var table funT = na
+if inShowDebug and barstate.islast
+    if na(funT)
+        funT := table.new(position.middle_left, 2, 10, border_width = 1)
+    table.cell(funT, 0, 0, "FUNNEL (bars)", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 1, 0, "N",             bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 0, 1, "uptrend bias",  text_size = size.small)
+    table.cell(funT, 1, 1, str.tostring(fUp),   text_size = size.small)
+    table.cell(funT, 0, 2, "downtrend bias",text_size = size.small)
+    table.cell(funT, 1, 2, str.tostring(fDn),   text_size = size.small)
+    table.cell(funT, 0, 3, "ema-tag (L)",   text_size = size.small)
+    table.cell(funT, 1, 3, str.tostring(fEma),  text_size = size.small)
+    table.cell(funT, 0, 4, "rsi-dip (L)",   text_size = size.small)
+    table.cell(funT, 1, 4, str.tostring(fRsi),  text_size = size.small)
+    table.cell(funT, 0, 5, "confirm (L)",   text_size = size.small)
+    table.cell(funT, 1, 5, str.tostring(fConf), text_size = size.small)
+    table.cell(funT, 0, 6, "bias+ema",      text_size = size.small)
+    table.cell(funT, 1, 6, str.tostring(fBE),   text_size = size.small)
+    table.cell(funT, 0, 7, "bias+ema+rsi",  text_size = size.small)
+    table.cell(funT, 1, 7, str.tostring(fBER),  text_size = size.small)
+    table.cell(funT, 0, 8, "FULL CE (all)", bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 1, 8, str.tostring(fFull), bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 0, 9, "FULL PE (all)", bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 1, 9, str.tostring(fFullS), bgcolor = color.new(color.orange, 35), text_size = size.small)
+else if not inShowDebug and not na(funT)
+    table.delete(funT)
+    funT := na
+
 // =============================================================================
 // === 8. ALERTS ===
 // Both mechanisms for all four events:
