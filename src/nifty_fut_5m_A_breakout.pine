@@ -98,8 +98,9 @@ inAtrMult      = input.float(1.2, "ATR stop multiple", minval = 0.1, step = 0.1,
      tooltip = "Initial stop distance = atrMult * ATR from entry. Default 1.2. [edge param]")
 inRrTarget     = input.float(2.0, "Reward:Risk target", minval = 0.5, step = 0.1, group = GRP_RISK,
      tooltip = "Target = entry +/- rrTarget * R, where R = |entry - stop|. Min 1:2 mandated -> default 2.0. [edge param]")
-inMinAtr       = input.float(0.0, "Min ATR (skip dead range)", minval = 0.0, step = 0.5, group = GRP_RISK,
-     tooltip = "Block entries when ATR < this (dead market). 0 = disabled. Tune per instrument scale. [edge param]")
+inMinAtr       = input.float(30.0, "Min ATR (skip dead range)", minval = 0.0, step = 0.5, group = GRP_RISK,
+     tooltip = "Block entries when ATR < this (dead market). 0 = disabled. Tune per instrument scale. [edge param] " +
+       "(set to 30 = top of the chop ATR band for the terminal Variant-A confirmation run.)")
 inMaxAtr       = input.float(0.0, "Max ATR (skip whipsaw, 0=off)", minval = 0.0, step = 0.5, group = GRP_RISK,
      tooltip = "Optional: block entries when ATR > this (news whipsaw). 0 = disabled.")
 inUseStructStop = input.bool(true, "Use structural stop", group = GRP_RISK,
