@@ -311,6 +311,7 @@ var int    entryBarIdx     = na     // bar_index of the entry (anchors the stop 
 var string pendingReason   = na     // set when WE close (time/flip); else inferred
 var float  closingTargetPx = na     // snapshot of target while in position (for reason)
 var float  closingTrailStop = na    // snapshot of stop  while in position (for reason)
+var float  closingR        = na     // snapshot of R (points) while in position (for realized-R)
 
 enterLong  = sigLong                // sigLong already requires flat (posOpen in GATE 3)
 enterShort = sigShort
@@ -366,6 +367,7 @@ if inUseTrail and inPos and posDir == -1 and rVal > 0
 if inPos
     closingTargetPx  := targetPx
     closingTrailStop := trailStop
+    closingR         := rVal
 
 // --- exits we trigger ourselves (the OCO bracket handles stop/target) ---
 // Time stop: force-flat in the flat window (15:15). Flip: a VALID opposite entry
@@ -396,10 +398,12 @@ if enterShort
 bracketActive = inPos or enterLong or enterShort
 // Stop leg = trailStop only when the trail is on; otherwise the FIXED initStop for
 // the life of the trade (Option-0 baseline). Limit leg is always the 2R target.
+// comment_profit/comment_loss tag the List-of-Trades "Signal" so a TARGET (limit)
+// fill is distinguishable from a STOP fill (both come through the one "Bracket" id).
 if bracketActive and posDir == 1
-    strategy.exit("Bracket", from_entry = "Long",  stop = inUseTrail ? trailStop : initStop, limit = targetPx)
+    strategy.exit("Bracket", from_entry = "Long",  stop = inUseTrail ? trailStop : initStop, limit = targetPx, comment_profit = "target", comment_loss = "stop")
 else if bracketActive and posDir == -1
-    strategy.exit("Bracket", from_entry = "Short", stop = inUseTrail ? trailStop : initStop, limit = targetPx)
+    strategy.exit("Bracket", from_entry = "Short", stop = inUseTrail ? trailStop : initStop, limit = targetPx, comment_profit = "target", comment_loss = "stop")
 
 // Time-stop / flip: market close at this bar's close (process_orders_on_close).
 // pendingReason tags the close so rendering can show the correct reason.
@@ -515,6 +519,19 @@ else if not inShowDebug and not na(dbgT)
 newTradeOpened = strategy.opentrades   > nz(strategy.opentrades[1])
 newTradeClosed = strategy.closedtrades > nz(strategy.closedtrades[1])
 
+// exit-reason tally (cumulative over the whole backtest; rendered in the debug
+// exit table). Counts + summed realized-R per bucket -> avg R per exit door.
+var int   cntTarget = 0
+var int   cntStop   = 0
+var int   cntTime   = 0
+var int   cntFlip   = 0
+var int   cntFlat   = 0
+var float sumRTarget = 0.0
+var float sumRStop   = 0.0
+var float sumRTime   = 0.0
+var float sumRFlip   = 0.0
+var float sumRFlat   = 0.0
+
 // closed-trade facts + exit-reason (shared by label and alert); computed once.
 bool   exitLong   = false
 float  exitPx     = na
@@ -530,6 +547,23 @@ if newTradeClosed
     fallbackReason = na(pendingReason) ? "flat" : pendingReason   // mid-range market close
     exitReason := exitLong ? (exitPx >= closingTargetPx ? "target" : (exitPx <= closingTrailStop ? "stop" : fallbackReason)) : (exitPx <= closingTargetPx ? "target" : (exitPx >= closingTrailStop ? "stop" : fallbackReason))
     pendingReason := na   // consumed
+    // realized R-multiple of this closed trade = points P&L / R-points (signed by dir)
+    rMult = (na(closingR) or closingR == 0) ? na : (exitPx - strategy.closedtrades.entry_price(xi)) * (exitLong ? 1.0 : -1.0) / closingR
+    if exitReason == "target"
+        cntTarget  += 1
+        sumRTarget += nz(rMult)
+    else if exitReason == "stop"
+        cntStop  += 1
+        sumRStop += nz(rMult)
+    else if exitReason == "time"
+        cntTime  += 1
+        sumRTime += nz(rMult)
+    else if exitReason == "flip"
+        cntFlip  += 1
+        sumRFlip += nz(rMult)
+    else
+        cntFlat  += 1
+        sumRFlat += nz(rMult)
 
 // BUY CE / BUY PE at the entry fill
 if newTradeOpened
@@ -563,6 +597,33 @@ else
     line.delete(tgtLn)
     stopLn := na
     tgtLn  := na
+
+// --- exit-reason breakdown panel (debug): count + avg R per exit door ---
+var table exitT = na
+if inShowDebug and barstate.islast
+    if na(exitT)
+        exitT := table.new(position.bottom_right, 3, 6, border_width = 1)
+    table.cell(exitT, 0, 0, "EXIT", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exitT, 1, 0, "N",    bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exitT, 2, 0, "avgR", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exitT, 0, 1, "target", text_size = size.small)
+    table.cell(exitT, 1, 1, str.tostring(cntTarget), text_size = size.small)
+    table.cell(exitT, 2, 1, cntTarget > 0 ? str.tostring(sumRTarget / cntTarget, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 2, "stop",   text_size = size.small)
+    table.cell(exitT, 1, 2, str.tostring(cntStop), text_size = size.small)
+    table.cell(exitT, 2, 2, cntStop > 0 ? str.tostring(sumRStop / cntStop, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 3, "time",   text_size = size.small)
+    table.cell(exitT, 1, 3, str.tostring(cntTime), text_size = size.small)
+    table.cell(exitT, 2, 3, cntTime > 0 ? str.tostring(sumRTime / cntTime, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 4, "flip",   text_size = size.small)
+    table.cell(exitT, 1, 4, str.tostring(cntFlip), text_size = size.small)
+    table.cell(exitT, 2, 4, cntFlip > 0 ? str.tostring(sumRFlip / cntFlip, "#.##") : "-", text_size = size.small)
+    table.cell(exitT, 0, 5, "flat",   text_size = size.small)
+    table.cell(exitT, 1, 5, str.tostring(cntFlat), text_size = size.small)
+    table.cell(exitT, 2, 5, cntFlat > 0 ? str.tostring(sumRFlat / cntFlat, "#.##") : "-", text_size = size.small)
+else if not inShowDebug and not na(exitT)
+    table.delete(exitT)
+    exitT := na
 
 // =============================================================================
 // === 8. ALERTS ===
