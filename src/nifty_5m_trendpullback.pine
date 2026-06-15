@@ -116,8 +116,8 @@ inAtrMult      = input.float(1.2, "Min stop distance (ATR)", minval = 0.1, step 
      tooltip = "Floor on R: the stop is never tighter than atrMult*ATR from entry (structural stop is used when it is WIDER). Default 1.2. [edge param]")
 inTargetMode   = input.string("rmult", "Target mode", options = ["rmult", "swing"], group = GRP_RISK,
      tooltip = "rmult = fixed rrTarget*R (closer than 2R for reversion). swing = recent swing high/low (trend-resumption); falls back to rmult if that swing is the wrong side of entry. Categorical.")
-inRrTarget     = input.float(1.5, "Reward:Risk target (rmult)", minval = 0.5, step = 0.1, group = GRP_RISK,
-     tooltip = "Target = entry +/- rrTarget*R. Reversion-into-trend targets are CLOSER than 2R -> default 1.5. [edge param]")
+inRrTarget     = input.float(2.5, "Reward:Risk target (rmult)", minval = 0.5, step = 0.1, group = GRP_RISK,
+     tooltip = "Target = entry +/- rrTarget*R (fixed-target mode). Raised to 2.5 to test whether the fatter MFE tail (>=3R 12%) pays. [edge param]")
 inMinAtr       = input.float(0.0, "Min ATR (skip dead range)", minval = 0.0, step = 0.5, group = GRP_RISK,
      tooltip = "Block entries when ATR < this (dead market). 0 = disabled. [edge param]")
 inMaxAtr       = input.float(0.0, "Max ATR (skip whipsaw, 0=off)", minval = 0.0, step = 0.5, group = GRP_RISK,
@@ -131,8 +131,8 @@ inContracts   = input.int(2, "Total contracts (>=2 to split)", minval = 1, group
      tooltip = "Entry size. Runner needs >=2 so it can book one slice and run another. Must allow the bookFrac split. Default 2.")
 inBookFrac    = input.float(50.0, "Book % at first target", minval = 1.0, maxval = 99.0, step = 5.0, group = GRP_RUNNER,
      tooltip = "Fraction of the position booked at the first target. Rounded to whole contracts; with 2 contracts ~50% = 1 booked + 1 runner.")
-inFirstTgtR   = input.float(1.5, "First target (R)", minval = 0.5, step = 0.5, group = GRP_RUNNER,
-     tooltip = "Runner mode: booked slice exits here (default 1.5R, matching the reversion target). Config.")
+inFirstTgtR   = input.float(2.0, "First target (R)", minval = 0.5, step = 0.5, group = GRP_RUNNER,
+     tooltip = "Runner mode: booked slice exits here (default 2.0R), the rest runs on the chandelier to harvest the 3R-5R tail. Config.")
 inTrailAtrMult = input.float(2.5, "Runner trail ATR mult", minval = 0.5, step = 0.5, group = GRP_RUNNER,
      tooltip = "Chandelier distance for the RUNNER (highest-high-since-entry - mult*ATR). SEPARATE from the 1.2 initial-stop mult — keep it LOOSE (2.5-3.0) so normal pullbacks don't scratch the 3R-5R tail. [edge param]")
 
