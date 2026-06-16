@@ -73,7 +73,7 @@ inAtrMult     = input.float(1.5, "Min stop distance (ATR)", minval = 0.1, step =
 inRrTarget    = input.float(2.0, "Reward:Risk target", minval = 0.5, step = 0.1, group = GRP_RISK,
      tooltip = "Fixed target = entry + rrTarget*R (used when runner OFF). [edge param]")
 
-inUseRunner    = input.bool(true, "Use runner (partial + trail)", group = GRP_RUNNER,
+inUseRunner    = input.bool(false, "Use runner (partial + trail)", group = GRP_RUNNER,
      tooltip = "OFF (default) = fixed rrTarget. ON = book bookFrac at firstTgtR, let the rest run on a loose chandelier. STOCKS may have a fat enough trend-tail to harvest (the MFE panel shows whether).")
 inBookFrac     = input.float(50.0, "Book % at first target", minval = 1.0, maxval = 99.0, step = 5.0, group = GRP_RUNNER)
 inFirstTgtR    = input.float(2.0, "First target (R)", minval = 0.5, step = 0.5, group = GRP_RUNNER, tooltip = "Runner books here. [edge param when runner on]")
