@@ -380,7 +380,7 @@ if inShowDebug and barstate.islast
 var table exT = na
 if inShowDebug and barstate.islast
     if na(exT)
-        exT := table.new(position.bottom_right, 3, 5, border_width = 1)
+        exT := table.new(position.middle_right, 3, 5, border_width = 1)   // off the bottom so the tester pane doesn't hide it
     table.cell(exT, 0, 0, "EXIT", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(exT, 1, 0, "N",    bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(exT, 2, 0, "avgR", bgcolor = color.gray, text_color = color.white, text_size = size.small)
@@ -400,7 +400,7 @@ if inShowDebug and barstate.islast
 var table mfeT = na
 if inShowDebug and barstate.islast
     if na(mfeT)
-        mfeT := table.new(position.bottom_left, 3, 7, border_width = 1)
+        mfeT := table.new(position.top_left, 3, 7, border_width = 1)   // top_left: clear of the Strategy-Tester pane (which hides bottom tables)
     table.cell(mfeT, 0, 0, "MFE", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(mfeT, 1, 0, "N",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(mfeT, 2, 0, "%",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
