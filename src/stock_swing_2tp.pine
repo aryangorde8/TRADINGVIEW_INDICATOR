@@ -1,0 +1,480 @@
+//@version=6
+// =============================================================================
+// STOCK SWING — TWO-TP SCALE-OUT VARIANT (daily, CASH EQUITY, long-only)
+// -----------------------------------------------------------------------------
+// PURPOSE  : HYPOTHESIS TEST, parallel to the validated fixed-2R baseline
+//            (src/stock_swing_ribbon_pullback.pine). Does a 2-target partial
+//            scale-out with a breakeven stop beat a single fixed 2R on profit
+//            factor across the validated basket? Exact copy of the baseline with
+//            ONLY the exit logic changed. NOT a tuning fork.
+// PRIOR    : partial-book + breakeven is close to the RUNNER, which already LOST to
+//            fixed-2R twice, AND the 3-TP variant tested alongside this. Prior is
+//            AGAINST it. Adopt ONLY if PF beats fixed-2R across most of the basket;
+//            else REJECTED and we STOP testing exit variants and deploy fixed-2R.
+// THE CHANGE — two partial targets with a breakeven stop:
+//            TP1 @ 1.5R book inTp1Pct (50%) -> move stop to ENTRY (breakeven)
+//            TP2 @ 2.0R book the REMAINING (other 50%) -> trade fully closed
+//            Stop hit at any stage -> exit remaining at that stop. Trend-break still
+//            closes any remainder. Breakeven stop tracked in a var, set on TP1 hit.
+// SAME      : ribbon regime filter, pullback+2-bar-confirm entry, structural
+//            ATR-floored stop, R = entry - stop, risk-based share sizing, long-only,
+//            instrumentation, costs. Stop GEOMETRY unchanged (only BE move added).
+//            Entry gate needs >=2 shares (1 per leg) vs baseline >=1 — negligible on
+//            daily large-caps at 10L capital, noted for fairness.
+// NON-REPAINT: all OHLC/EMA values are completed-bar; TP1-hit detection uses THIS
+//            bar's high and the breakeven stop applies to SUBSEQUENT bars; orders fill
+//            at the confirmed bar close (process_orders_on_close). No lookahead.
+// =============================================================================
+strategy(
+     title                   = "Stock Swing — Two-TP Scale-out (daily, long-only)",
+     shorttitle              = "Swing2TP",
+     overlay                 = true,
+     pyramiding              = 0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,
+     initial_capital         = 1000000,                       // INR 10 lakh
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.2,                           // ~0.2%/side delivery all-in
+     slippage                = 5,
+     currency                = currency.INR,
+     max_labels_count        = 500,
+     max_lines_count         = 500,
+     close_entries_rule      = "ANY")
+
+// =============================================================================
+// === 1. INPUTS ===
+// Mechanism params: pullbackAtr, atrMult, tp1R/tp2R, tp1Pct. Ribbon/ATR/swing LENGTHS,
+// riskPct, confirmWin and selectors are STRUCTURAL CONFIG. TP levels/fractions are
+// SET ONCE — not tuned to a result (adoption rule already pre-stated).
+// =============================================================================
+GRP_BIAS    = "Regime (EMA ribbon)"
+GRP_ENTRY   = "Entry (pullback)"
+GRP_RISK    = "Risk / stop"
+GRP_TP      = "Two-TP scale-out"
+GRP_SIZE    = "Position sizing"
+GRP_DISPLAY = "Display"
+
+inDirection  = input.string("long_only", "Direction", options = ["long_only", "short_only", "both"], group = GRP_BIAS,
+     tooltip = "long_only (DEFAULT). short side rejected (see FINDINGS_STOCKS.md). short_only here = no trades; both = behaves long-only.")
+inRibbonMode = input.string("light", "Ribbon mode", options = ["full", "light", "minimal"], group = GRP_BIAS,
+     tooltip = "Bullish-trend FILTER. full = 20>50>100>200; light = 20>50>200; minimal = 20>50. ALL also require close > EMA200.")
+inEma1 = input.int(20,  "EMA fast (pullback ref)", minval = 2,  group = GRP_BIAS, tooltip = "config")
+inEma2 = input.int(50,  "EMA 2",                   minval = 3,  group = GRP_BIAS, tooltip = "config")
+inEma3 = input.int(100, "EMA 3",                   minval = 5,  group = GRP_BIAS, tooltip = "config")
+inEma4 = input.int(200, "EMA slow (trend anchor)", minval = 10, group = GRP_BIAS, tooltip = "config")
+
+inPullbackEma = input.string("20", "Pull-back to EMA", options = ["20", "50"], group = GRP_ENTRY)
+inPullbackAtr = input.float(0.5, "Pull-back tag tolerance (ATR)", minval = 0.0, step = 0.05, group = GRP_ENTRY, tooltip = "[edge param]")
+inConfirmWin  = input.int(3, "Confirm window (bars)", minval = 0, group = GRP_ENTRY, tooltip = "config")
+
+inAtrLen      = input.int(14, "ATR length", minval = 1, group = GRP_RISK, tooltip = "config")
+inSwingLook   = input.int(10, "Swing-low lookback", minval = 2, group = GRP_RISK, tooltip = "config")
+inSwingBufAtr = input.float(0.25, "Swing buffer (ATR)", minval = 0.0, step = 0.05, group = GRP_RISK, tooltip = "config")
+inAtrMult     = input.float(1.5, "Min stop distance (ATR)", minval = 0.1, step = 0.1, group = GRP_RISK, tooltip = "Floor on R. [edge param]")
+
+inTp1R   = input.float(1.5, "TP1 (R)", minval = 0.5, step = 0.1, group = GRP_TP, tooltip = "Book inTp1Pct here; then stop -> entry (BE). [mechanism param]")
+inTp2R   = input.float(2.0, "TP2 (R)", minval = 0.5, step = 0.1, group = GRP_TP, tooltip = "Book the REMAINING here; trade fully closed. [mechanism param]")
+inTp1Pct = input.float(50.0, "TP1 book %", minval = 1.0, maxval = 99.0, step = 1.0, group = GRP_TP, tooltip = "TP2 books the remainder (100 - TP1%). [mechanism param]")
+
+inRiskPct = input.float(1.0, "Risk % of equity per trade", minval = 0.1, maxval = 10.0, step = 0.1, group = GRP_SIZE,
+     tooltip = "shares = floor(equity*risk% / stop-distance), capped at no-leverage. Sizing, not an edge param.")
+
+inShowEmas    = input.bool(true,  "Show ribbon EMAs", group = GRP_DISPLAY)
+inShowTp      = input.bool(true,  "Show SL/TP1/TP2 lines", group = GRP_DISPLAY)
+inShowSignals = input.bool(false, "Show signal markers (debug)", group = GRP_DISPLAY)
+inShowDebug   = input.bool(false, "Show debug panels (funnel/exit/MFE/size)", group = GRP_DISPLAY)
+inAlertTag    = input.string("STOCK SWING 2TP", "Alert tag", group = GRP_DISPLAY)
+
+// =============================================================================
+// === 2. INDICATORS / DATA ===
+// =============================================================================
+ema1 = ta.ema(close, inEma1)
+ema2 = ta.ema(close, inEma2)
+ema3 = ta.ema(close, inEma3)
+ema4 = ta.ema(close, inEma4)
+atrVal   = ta.atr(inAtrLen)
+swingLow = ta.lowest(low, inSwingLook)
+pullEma  = inPullbackEma == "20" ? ema1 : ema2
+
+// =============================================================================
+// === 3. REGIME FILTER (persistent uptrend state — NOT the entry) ===
+// =============================================================================
+dataReady = not na(ema4) and not na(atrVal)
+ribbonBull = switch inRibbonMode
+    "full"    => ema1 > ema2 and ema2 > ema3 and ema3 > ema4 and close > ema4
+    "minimal" => ema1 > ema2 and close > ema4
+    => ema1 > ema2 and ema2 > ema4 and close > ema4          // "light"
+longEligible = dataReady and ribbonBull
+
+// =============================================================================
+// === 4. SIGNAL LOGIC (identical to baseline) ===
+// =============================================================================
+tagLong     = low  <= pullEma + inPullbackAtr * atrVal
+confirmLong = close > pullEma and close > open
+setupLong   = longEligible and tagLong
+
+var int armLong = 0
+trigLong  = longEligible and confirmLong and (setupLong or armLong > 0)
+armLong  := trigLong ? 0 : setupLong ? inConfirmWin : (armLong > 0 and longEligible) ? armLong - 1 : 0
+
+posOpen = strategy.position_size != 0
+sigLong = trigLong and not posOpen
+
+// =============================================================================
+// === 5. RISK, SIZING & TWO-TP EXIT STATE ===
+// Structural ATR-floored stop (UNCHANGED). 2 partial targets + breakeven stop.
+// =============================================================================
+var int    posDir        = 0
+var float  entryPx       = na
+var float  initStop      = na
+var float  rVal          = na
+var float  posShares     = na
+var int    entryBarIdx   = na
+var string pendingReason = na
+var float  tp1Px         = na
+var float  tp2Px         = na
+var float  tp1Sh         = na
+var float  tp2Sh         = na
+var float  stopLevel     = na          // breakeven-ratcheting stop
+var bool   t1Done        = false
+var bool   t2Done        = false
+// snapshots for the exit classifier (survive a same-bar re-entry)
+var float  closingR      = na
+var float  cEntry        = na
+var float  cTp1          = na
+var float  cTp2          = na
+// per-trade summary accumulators
+var float  accPtsW       = 0.0
+var float  accRW         = 0.0
+var string accLegs       = ""
+var float  accOrig       = na
+var bool   summaryPending = false
+
+// candidate geometry + risk-based size (computed every bar; committed on entry)
+candStructStop = swingLow - inSwingBufAtr * atrVal
+candFloorStop  = close - inAtrMult * atrVal
+candInitStop   = math.min(candStructStop, candFloorStop)     // wider (lower) of the two
+candR          = close - candInitStop
+candRiskCash   = strategy.equity * inRiskPct / 100.0
+candMaxShares  = math.floor(strategy.equity / close)
+candShares     = candR > 0 ? math.max(0, math.min(math.floor(candRiskCash / candR), candMaxShares)) : 0
+allowLong      = inDirection == "long_only" or inDirection == "both"
+doEnterLong    = sigLong and candShares >= 2 and allowLong   // >=2 so each of 2 legs gets >=1 share
+
+// fix geometry + leg sizing on the entry (resume) bar. Non-repaint: completed-bar values.
+if doEnterLong
+    posDir        := 1
+    entryPx       := close
+    initStop      := candInitStop
+    rVal          := candR
+    posShares     := candShares
+    entryBarIdx   := bar_index
+    pendingReason := na
+    tp1Px         := close + inTp1R * candR
+    tp2Px         := close + inTp2R * candR
+    s1 = math.max(1.0, math.min(math.floor(candShares * inTp1Pct / 100.0), candShares - 1.0))   // keep >=1 share for TP2
+    tp1Sh         := s1
+    tp2Sh         := candShares - s1                         // TP2 books the rest
+    stopLevel     := candInitStop
+    t1Done        := false
+    t2Done        := false
+    // reset trade summary
+    accPtsW       := 0.0
+    accRW         := 0.0
+    accLegs       := ""
+    accOrig       := candShares
+    summaryPending := true
+
+// move the stop to breakeven once TP1 is reached (detection on THIS bar's high; the BE
+// stop applies on SUBSEQUENT bars via the resting exit orders). Non-repaint.
+if posOpen and posDir == 1 and rVal > 0
+    if not t1Done and high >= tp1Px
+        t1Done := true
+    if not t2Done and high >= tp2Px
+        t2Done := true
+    stopLevel := t1Done ? entryPx : initStop
+
+// snapshot live levels for the classifier
+if posOpen
+    closingR := rVal
+    cEntry   := entryPx
+    cTp1     := tp1Px
+    cTp2     := tp2Px
+
+// TREND-BREAK exit: ribbon lost -> close any remainder.
+trendBreak = posOpen and posDir == 1 and not longEligible
+
+// =============================================================================
+// === 6. ORDERS ===
+// Entry market (fills at this bar's close, POOC). Two partial brackets, each its own
+// qty + limit (its TP) + the shared stop (initial, then breakeven after TP1). Once a
+// leg's TP is reached its flag stops resubmission; the remaining leg keeps the (BE)
+// stop. Same-bar stop+limit -> TV fills STOP FIRST (conservative). Non-repaint.
+// =============================================================================
+if doEnterLong
+    strategy.entry("Long", strategy.long, qty = posShares)
+
+active = posOpen or doEnterLong
+if active and not t1Done and tp1Sh >= 1
+    strategy.exit("TP1", from_entry = "Long", qty = tp1Sh, limit = tp1Px, stop = stopLevel, comment_profit = "tp1", comment_loss = "sl")
+if active and not t2Done and tp2Sh >= 1
+    strategy.exit("TP2", from_entry = "Long", qty = tp2Sh, limit = tp2Px, stop = stopLevel, comment_profit = "tp2", comment_loss = "sl")
+
+if trendBreak
+    pendingReason := "trendBreak"
+    strategy.close("Long", comment = "trend break")
+
+// =============================================================================
+// === 7. PLOTTING + INSTRUMENTATION ===
+// =============================================================================
+plot(inShowEmas ? ema1 : na, "EMA fast", color = color.new(color.yellow, 0),  linewidth = 1)
+plot(inShowEmas ? ema2 : na, "EMA 2",    color = color.new(color.orange, 20), linewidth = 1)
+plot(inShowEmas ? ema3 : na, "EMA 3",    color = color.new(color.red,    40), linewidth = 1)
+plot(inShowEmas ? ema4 : na, "EMA slow", color = color.new(color.fuchsia,0),  linewidth = 2)
+bgcolor(longEligible ? color.new(color.green, 92) : na, title = "Uptrend regime")
+
+ctxRejectLong = trigLong and posOpen
+plotshape(inShowSignals and trigLong,      title = "raw pullback", style = shape.circle,     location = location.belowbar, color = color.new(color.green, 60), size = size.tiny)
+plotshape(inShowSignals and doEnterLong,   title = "ENTER",        style = shape.triangleup, location = location.belowbar, color = color.new(color.lime,  0), size = size.tiny)
+plotshape(inShowSignals and ctxRejectLong, title = "in-pos skip",  style = shape.xcross,     location = location.belowbar, color = color.new(color.gray,  0), size = size.tiny)
+
+// --- MFE/MAE shadow-tracker (IGNORES targets; raw run to -1R stop or trend-break) ---
+var array<float> mfeEntry = array.new_float()
+var array<float> mfeRpts  = array.new_float()
+var array<float> mfeStop  = array.new_float()
+var array<float> mfeMaxF  = array.new_float()
+var array<float> mfeMaxA  = array.new_float()
+var int   mfeN   = 0
+var int   mfeGe1 = 0
+var int   mfeGe2 = 0
+var int   mfeGe3 = 0
+var int   mfeGe4 = 0
+var int   mfeGe5 = 0
+var float mfeSumAdv = 0.0
+mfeI = 0
+while mfeI < array.size(mfeEntry)
+    e   = array.get(mfeEntry, mfeI)
+    rp  = array.get(mfeRpts, mfeI)
+    stp = array.get(mfeStop, mfeI)
+    favR = (high - e) / rp
+    advR = (e - low) / rp
+    array.set(mfeMaxF, mfeI, math.max(array.get(mfeMaxF, mfeI), favR))
+    array.set(mfeMaxA, mfeI, math.max(array.get(mfeMaxA, mfeI), advR))
+    if low <= stp or not longEligible
+        mx = array.get(mfeMaxF, mfeI)
+        mfeN   += 1
+        mfeGe1 += mx >= 1.0 ? 1 : 0
+        mfeGe2 += mx >= 2.0 ? 1 : 0
+        mfeGe3 += mx >= 3.0 ? 1 : 0
+        mfeGe4 += mx >= 4.0 ? 1 : 0
+        mfeGe5 += mx >= 5.0 ? 1 : 0
+        mfeSumAdv += array.get(mfeMaxA, mfeI)
+        array.remove(mfeEntry, mfeI)
+        array.remove(mfeRpts, mfeI)
+        array.remove(mfeStop, mfeI)
+        array.remove(mfeMaxF, mfeI)
+        array.remove(mfeMaxA, mfeI)
+    else
+        mfeI += 1
+if doEnterLong and candR > 0
+    array.push(mfeEntry, close)
+    array.push(mfeRpts, candR)
+    array.push(mfeStop, candInitStop)
+    array.push(mfeMaxF, 0.0)
+    array.push(mfeMaxA, 0.0)
+
+// --- entry funnel ---
+var int fRibbon = 0
+var int fTag    = 0
+var int fConf   = 0
+var int fSetup  = 0
+var int fFull   = 0
+fRibbon += nz(longEligible ? 1 : 0)
+fTag    += nz(tagLong ? 1 : 0)
+fConf   += nz(confirmLong ? 1 : 0)
+fSetup  += nz(setupLong ? 1 : 0)
+fFull   += nz(trigLong ? 1 : 0)
+
+// --- per-leg exit tally + rich BUY label + per-trade summary EXIT label ---
+var int   cntTp1   = 0
+var int   cntTp2   = 0
+var int   cntBE    = 0
+var int   cntStop  = 0
+var int   cntBreak = 0
+var float sumRTp1   = 0.0
+var float sumRTp2   = 0.0
+var float sumRBE    = 0.0
+var float sumRStop  = 0.0
+var float sumRBreak = 0.0
+
+newOpened = strategy.opentrades > nz(strategy.opentrades[1])
+var int prevClosed = 0
+if strategy.closedtrades > prevClosed
+    for ci = prevClosed to strategy.closedtrades - 1
+        xp    = strategy.closedtrades.exit_price(ci)
+        ep2   = strategy.closedtrades.entry_price(ci)
+        legSz = strategy.closedtrades.size(ci)
+        tolR  = (not na(closingR) and closingR > 0) ? closingR * 0.2 : syminfo.mintick
+        isTpLeg = not na(closingR) and xp >= cTp1 - tolR
+        reason = isTpLeg ? (xp >= cTp2 - tolR ? "tp2" : "tp1")
+             : (not na(pendingReason) ? "trendBreak" : (xp >= cEntry - tolR ? "BE" : "stop"))
+        rM = (na(closingR) or closingR == 0) ? na : (xp - ep2) / closingR
+        if reason == "tp1"
+            cntTp1 += 1
+            sumRTp1 += nz(rM)
+        else if reason == "tp2"
+            cntTp2 += 1
+            sumRTp2 += nz(rM)
+        else if reason == "BE"
+            cntBE += 1
+            sumRBE += nz(rM)
+        else if reason == "trendBreak"
+            cntBreak += 1
+            sumRBreak += nz(rM)
+        else
+            cntStop += 1
+            sumRStop += nz(rM)
+        // accumulate the weighted trade total
+        fr = (not na(accOrig) and accOrig > 0) ? legSz / accOrig : 0.0
+        accPtsW += (xp - cEntry) * fr
+        accRW   += (na(closingR) or closingR == 0) ? 0.0 : (xp - cEntry) / closingR * fr
+        accLegs := accLegs + reason + " "
+    pendingReason := na
+    prevClosed := strategy.closedtrades
+    // trade fully closed -> emit ONE summary EXIT label (total R/pts + legs filled)
+    if strategy.opentrades == 0 and summaryPending and not na(accOrig)
+        sCol = accRW >= 0 ? color.new(color.orange, 0) : color.new(color.red, 0)
+        label.new(bar_index, low, "EXIT  " + str.tostring(accRW, "#.##") + "R  (" + str.tostring(math.round(accPtsW)) + " pts)\nlegs: " + accLegs,
+             xloc = xloc.bar_index, style = label.style_label_up, color = sCol, textcolor = color.black, size = size.small,
+             tooltip = "Weighted total across booked legs. legs filled: " + accLegs)
+        summaryPending := false
+
+if newOpened
+    oi   = strategy.opentrades - 1
+    obar = strategy.opentrades.entry_bar_index(oi)
+    opx  = strategy.opentrades.entry_price(oi)
+    buyTxt = "BUY " + str.tostring(posShares) + " sh @ " + str.tostring(opx, format.mintick)
+         + "\nSL  " + str.tostring(initStop, format.mintick) + "  (-" + str.tostring(entryPx - initStop, format.mintick) + ")"
+         + "\nTP1 " + str.tostring(tp1Px, format.mintick) + "  (+" + str.tostring(tp1Px - entryPx, format.mintick) + ", " + str.tostring(inTp1R) + "R, " + str.tostring(tp1Sh) + "sh)"
+         + "\nTP2 " + str.tostring(tp2Px, format.mintick) + "  (+" + str.tostring(tp2Px - entryPx, format.mintick) + ", " + str.tostring(inTp2R) + "R, " + str.tostring(tp2Sh) + "sh)"
+    label.new(obar, opx, buyTxt, xloc = xloc.bar_index, style = label.style_label_up,
+         color = color.new(color.green, 0), textcolor = color.white, size = size.small, tooltip = buyTxt)
+
+// --- live SL/TP1/TP2 lines (SL moves to breakeven after TP1); deleted when flat ---
+var line slLn = na
+var line t1Ln = na
+var line t2Ln = na
+if posOpen and inShowTp
+    line.delete(slLn)
+    line.delete(t1Ln)
+    line.delete(t2Ln)
+    slLn := line.new(entryBarIdx, stopLevel, bar_index, stopLevel, xloc = xloc.bar_index, color = color.new(color.red,   0), style = line.style_dashed, width = 1)
+    t1Ln := line.new(entryBarIdx, tp1Px,     bar_index, tp1Px,     xloc = xloc.bar_index, color = color.new(color.green, 30), style = line.style_dotted, width = 1)
+    t2Ln := line.new(entryBarIdx, tp2Px,     bar_index, tp2Px,     xloc = xloc.bar_index, color = color.new(color.green, 0),  style = line.style_dashed, width = 1)
+else
+    line.delete(slLn)
+    line.delete(t1Ln)
+    line.delete(t2Ln)
+    slLn := na
+    t1Ln := na
+    t2Ln := na
+
+// --- debug panels ---
+var table funT = na
+if inShowDebug and barstate.islast
+    if na(funT)
+        funT := table.new(position.middle_left, 2, 6, border_width = 1)
+    table.cell(funT, 0, 0, "FUNNEL", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 1, 0, "bars",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 0, 1, "ribbon up",  text_size = size.small)
+    table.cell(funT, 1, 1, str.tostring(fRibbon), text_size = size.small)
+    table.cell(funT, 0, 2, "tag",        text_size = size.small)
+    table.cell(funT, 1, 2, str.tostring(fTag), text_size = size.small)
+    table.cell(funT, 0, 3, "confirm",    text_size = size.small)
+    table.cell(funT, 1, 3, str.tostring(fConf), text_size = size.small)
+    table.cell(funT, 0, 4, "setup",      text_size = size.small)
+    table.cell(funT, 1, 4, str.tostring(fSetup), text_size = size.small)
+    table.cell(funT, 0, 5, "FULL trig",  bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 1, 5, str.tostring(fFull), bgcolor = color.new(color.orange, 35), text_size = size.small)
+
+var table exT = na
+if inShowDebug and barstate.islast
+    if na(exT)
+        exT := table.new(position.middle_right, 3, 6, border_width = 1)
+    table.cell(exT, 0, 0, "EXIT leg", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exT, 1, 0, "N",    bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exT, 2, 0, "avgR", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exT, 0, 1, "tp1 (1.5R)", text_size = size.small)
+    table.cell(exT, 1, 1, str.tostring(cntTp1), text_size = size.small)
+    table.cell(exT, 2, 1, cntTp1 > 0 ? str.tostring(sumRTp1 / cntTp1, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 2, "tp2 (2R)", text_size = size.small)
+    table.cell(exT, 1, 2, str.tostring(cntTp2), text_size = size.small)
+    table.cell(exT, 2, 2, cntTp2 > 0 ? str.tostring(sumRTp2 / cntTp2, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 3, "BE", text_size = size.small)
+    table.cell(exT, 1, 3, str.tostring(cntBE), text_size = size.small)
+    table.cell(exT, 2, 3, cntBE > 0 ? str.tostring(sumRBE / cntBE, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 4, "stop", text_size = size.small)
+    table.cell(exT, 1, 4, str.tostring(cntStop), text_size = size.small)
+    table.cell(exT, 2, 4, cntStop > 0 ? str.tostring(sumRStop / cntStop, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 5, "trendBreak", text_size = size.small)
+    table.cell(exT, 1, 5, str.tostring(cntBreak), text_size = size.small)
+    table.cell(exT, 2, 5, cntBreak > 0 ? str.tostring(sumRBreak / cntBreak, "#.##") : "-", text_size = size.small)
+
+var table mfeT = na
+if inShowDebug and barstate.islast
+    if na(mfeT)
+        mfeT := table.new(position.top_left, 3, 7, border_width = 1)
+    table.cell(mfeT, 0, 0, "MFE", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 1, 0, "N",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 2, 0, "%",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 0, 1, ">=1R", text_size = size.small)
+    table.cell(mfeT, 1, 1, str.tostring(mfeGe1), text_size = size.small)
+    table.cell(mfeT, 2, 1, mfeN > 0 ? str.tostring(100.0 * mfeGe1 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 2, ">=2R", text_size = size.small)
+    table.cell(mfeT, 1, 2, str.tostring(mfeGe2), text_size = size.small)
+    table.cell(mfeT, 2, 2, mfeN > 0 ? str.tostring(100.0 * mfeGe2 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 3, ">=3R", text_size = size.small)
+    table.cell(mfeT, 1, 3, str.tostring(mfeGe3), text_size = size.small)
+    table.cell(mfeT, 2, 3, mfeN > 0 ? str.tostring(100.0 * mfeGe3 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 4, ">=4R", text_size = size.small)
+    table.cell(mfeT, 1, 4, str.tostring(mfeGe4), text_size = size.small)
+    table.cell(mfeT, 2, 4, mfeN > 0 ? str.tostring(100.0 * mfeGe4 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 5, ">=5R", text_size = size.small)
+    table.cell(mfeT, 1, 5, str.tostring(mfeGe5), text_size = size.small)
+    table.cell(mfeT, 2, 5, mfeN > 0 ? str.tostring(100.0 * mfeGe5 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 6, "avgMAE", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 1, 6, mfeN > 0 ? str.tostring(mfeSumAdv / mfeN, "#.##") + "R" : "-", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 2, 6, "", bgcolor = color.new(color.teal, 60), text_size = size.small)
+
+var table pT = na
+if inShowDebug and barstate.islast
+    if na(pT)
+        pT := table.new(position.top_right, 2, 7, border_width = 1)
+    table.cell(pT, 0, 0, "SWING-2TP", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(pT, 1, 0, longEligible ? "UPTREND" : "no-trade", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(pT, 0, 1, "R / share", text_size = size.small)
+    table.cell(pT, 1, 1, candR > 0 ? str.tostring(candR, format.mintick) : "-", text_size = size.small)
+    table.cell(pT, 0, 2, "Size now",  text_size = size.small)
+    table.cell(pT, 1, 2, str.tostring(candShares) + " sh", text_size = size.small)
+    table.cell(pT, 0, 3, "Legs sh",   text_size = size.small)
+    table.cell(pT, 1, 3, posOpen ? str.tostring(tp1Sh) + "/" + str.tostring(tp2Sh) : "-", text_size = size.small)
+    table.cell(pT, 0, 4, "In position", text_size = size.small)
+    table.cell(pT, 1, 4, posOpen ? str.tostring(strategy.position_size) + " sh @ " + str.tostring(math.round(entryPx)) : "flat", text_color = posOpen ? color.lime : color.gray, text_size = size.small)
+    table.cell(pT, 0, 5, "Stop now",  text_size = size.small)
+    table.cell(pT, 1, 5, posOpen ? str.tostring(math.round(stopLevel)) + (t1Done ? " (BE)" : " (init)") : "-", text_size = size.small)
+    pnl = posOpen ? math.round(close - entryPx) : 0
+    table.cell(pT, 0, 6, "Open P&L/sh", text_size = size.small)
+    table.cell(pT, 1, 6, posOpen ? str.tostring(pnl) + " pts" : "-", text_color = pnl >= 0 ? color.lime : color.red, text_size = size.small)
+
+// =============================================================================
+// === 8. ALERTS ===
+// =============================================================================
+exitFired = strategy.closedtrades > nz(strategy.closedtrades[1])
+alertcondition(doEnterLong, title = "BUY",  message = "BUY {{ticker}} @ {{close}}")
+alertcondition(exitFired,   title = "EXIT", message = "EXIT {{ticker}} @ {{close}}")
+if doEnterLong
+    alert(inAlertTag + " | BUY " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | " + str.tostring(posShares) + " sh (TP1/2 " + str.tostring(tp1Sh) + "/" + str.tostring(tp2Sh) + ")", alert.freq_once_per_bar_close)
+if exitFired
+    alert(inAlertTag + " | EXIT " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
