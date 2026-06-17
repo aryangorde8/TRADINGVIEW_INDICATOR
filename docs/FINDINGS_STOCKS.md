@@ -74,7 +74,32 @@ the stop; R is correctly the actual stop distance.)
 
 ---
 
-## 4. DEPLOYABLE conclusion
+## 4. Level-based exit variant — TESTED head-to-head, REJECTED on profit factor
+Parallel hypothesis test (`src/stock_swing_levelexit.pine`): exact copy of the
+baseline with **only** the target changed — nearest prior swing high (non-repaint,
+`ta.highest(high[1], lookback)`), exited just below the level, with set-once bounds
+(skip <1R, cap 4R, skip if no level). Run on the 11 validated names vs fixed-2R.
+Pre-stated rule: **adopt only if profit factor is consistently better.**
+
+- **Win rate: level exits RAISED it consistently** (INFY 44→54, TCS 39→55,
+  TITAN 43→55, MARUTI 43→52, etc.) — the hypothesis "closer levels hit more often"
+  is *confirmed*.
+- **Profit factor: mostly FELL, and not closely:** MARUTI 1.51→1.26, BHARTIARTL
+  1.89→1.48, LT 1.30→1.09, **ULTRACEMCO 1.47→0.94** and **SUNPHARMA 1.23→0.87**
+  (both crossed into *losing*). Only TCS improved (1.27→1.44).
+
+**Why:** winning more often at a smaller, level-capped reward made **less money**
+than winning less often at the bigger fixed 2R. The win-rate/reward tradeoff landed
+on the side of the larger fixed reward. The PF gaps are large (two names flipped to
+losing), so the "psychological smoothness of a higher hit rate" argument doesn't
+rescue it.
+
+**Verdict: level-based exit REJECTED on profit factor — fixed-2R retained.** A clean,
+measured test that *confirmed* the baseline. Per the rule, no tuning of the
+lookback/buffer/bounds to chase a better number (that would be curve-fitting). The
+file stays as a rejected-research artifact, alongside the short side and the runner.
+
+## 5. DEPLOYABLE conclusion
 **LONG-ONLY ribbon-pullback swing on confirmed-uptrend stocks; CASH in downtrends.**
 The bear-market answer is **capital preservation (cash)**, not shorting — you compound
 the validated long edge during uptrends and simply don't trade names in downtrends
@@ -93,7 +118,7 @@ the validated long edge during uptrends and simply don't trade names in downtren
 
 ---
 
-## 5. Method discipline carried through
+## 6. Method discipline carried through
 Clean fixed-bracket baseline; exit-reason counter, MFE/MAE shadow-tracker, entry-funnel
 instrumentation on every variant; multi-name validation (the stock equivalent of
 multi-regime); reject on evidence (short, runner) rather than tune toward a target; no
