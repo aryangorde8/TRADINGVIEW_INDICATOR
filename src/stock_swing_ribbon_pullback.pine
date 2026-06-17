@@ -89,6 +89,8 @@ inShowEmas    = input.bool(true,  "Show ribbon EMAs", group = GRP_DISPLAY)
 inShowTp      = input.bool(true,  "Show stop/target lines", group = GRP_DISPLAY)
 inShowSignals = input.bool(false, "Show signal markers (debug)", group = GRP_DISPLAY)
 inShowDebug   = input.bool(false, "Show debug panels (funnel/exit/MFE/size)", group = GRP_DISPLAY)
+inShowBadge   = input.bool(true,  "Show regime status badge (weekly-scan tool)", group = GRP_DISPLAY,
+     tooltip = "PURE DISPLAY (no effect on trades). Reads the SAME ribbon rule the strategy trades and shows BULLISH / BEARISH / NEUTRAL for the current bar. BULLISH = a name to WATCH for a pullback entry — NOT buy-now (the entry is still the pullback+confirm the strategy generates). Use it to scan a watchlist for tradeable-long regime.")
 inAlertTag    = input.string("STOCK SWING", "Alert tag", group = GRP_DISPLAY)
 
 // =============================================================================
@@ -234,6 +236,33 @@ plot(inShowEmas ? ema2 : na, "EMA 2",    color = color.new(color.orange, 20), li
 plot(inShowEmas ? ema3 : na, "EMA 3",    color = color.new(color.red,    40), linewidth = 1)
 plot(inShowEmas ? ema4 : na, "EMA slow", color = color.new(color.fuchsia,0),  linewidth = 2)
 bgcolor(longEligible ? color.new(color.green, 92) : na, title = "Uptrend regime")
+
+// --- REGIME STATUS BADGE (PURE DISPLAY — no effect on entries/exits) ---
+// Reads the SAME ribbon rule the strategy trades (BULLISH = ribbonBull, the long
+// filter), respecting inRibbonMode, so it matches what the strategy would trade.
+// BULLISH = a candidate to WATCH for a pullback entry, NOT a buy-now trigger.
+ribbonBear = switch inRibbonMode
+    "full"    => ema1 < ema2 and ema2 < ema3 and ema3 < ema4 and close < ema4
+    "minimal" => ema1 < ema2 and close < ema4
+    => ema1 < ema2 and ema2 < ema4 and close < ema4          // "light" (mirror of ribbonBull)
+regimeState = not dataReady ? "WARMUP" : ribbonBull ? "BULLISH" : ribbonBear ? "BEARISH" : "NEUTRAL"
+badgeTxt = regimeState == "BULLISH" ? "BULLISH — uptrend, watch for pullback entry"
+     : regimeState == "BEARISH"     ? "BEARISH — downtrend, stay in cash"
+     : regimeState == "NEUTRAL"     ? "NEUTRAL — no clean trend, skip"
+     :                                "warming up…"
+badgeCol = regimeState == "BULLISH" ? color.new(color.green,  0)
+     : regimeState == "BEARISH"     ? color.new(color.red,    0)
+     : regimeState == "NEUTRAL"     ? color.new(color.orange, 10)
+     :                                color.new(color.gray,   0)
+distPct = (not na(ema4) and ema4 != 0) ? (close - ema4) / ema4 * 100.0 : na
+distStr = not na(distPct) ? (distPct >= 0 ? "+" : "") + str.tostring(distPct, "#.#") + "%" : "—"
+var table badgeT = na
+if inShowBadge and barstate.islast
+    if na(badgeT)
+        badgeT := table.new(position.top_center, 1, 2, border_width = 1)
+    table.cell(badgeT, 0, 0, badgeTxt, bgcolor = badgeCol, text_color = color.white, text_size = size.normal)
+    table.cell(badgeT, 0, 1, "price vs EMA" + str.tostring(inEma4) + ": " + distStr + "  ·  mode: " + inRibbonMode + "  ·  regime filter, WATCH not buy",
+         bgcolor = color.new(color.black, 15), text_color = color.silver, text_size = size.small)
 
 // --- debug signal markers (viz only; no order effect) ---
 ctxRejectLong = trigLong and posOpen   // trigger fired but already in a position
