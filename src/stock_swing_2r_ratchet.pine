@@ -1,34 +1,33 @@
 //@version=6
 // =============================================================================
-// STOCK SWING — 2R BOOK + STEP-TRAIL STOP VARIANT (daily, CASH EQUITY, long-only)
+// STOCK SWING — 2R BOOK + BREAKEVEN VARIANT (daily, CASH EQUITY, long-only)
 // -----------------------------------------------------------------------------
 // PURPOSE  : HYPOTHESIS TEST, parallel to the validated fixed-2R baseline
 //            (src/stock_swing_ribbon_pullback.pine). Keeps the baseline's FIXED 2R
-//            full take-profit, but ADDS a ratcheting stop on the way up. Question:
-//            does protecting the trade with a step-trail (cost at 1R, lock 1R at 1.5R)
-//            improve PF vs the baseline's static -1R stop held to the 2R target?
-//            Exact copy of the baseline with ONLY the stop management changed.
-// PRIOR    : moving the stop up before target is the RUNNER/BE family, which has lost
-//            to fixed-2R every test so far. Tightening the stop converts some eventual
-//            2R winners into BE/+1R scratches (whipsaw on the pullback). Prior AGAINST.
+//            full take-profit, but moves the stop to COST once the trade reaches 1R.
+//            Question: does a single breakeven move (no trailing in between) improve
+//            PF vs the baseline's static -1R stop held to the 2R target? Exact copy of
+//            the baseline with ONLY the stop management changed.
+// PRIOR    : moving the stop up before target is the BE/runner family, which has lost
+//            to fixed-2R every test so far. A BE move converts some eventual 2R winners
+//            into 0R scratches (whipsaw on the pullback back through 1R). Prior AGAINST.
 //            Adopt ONLY if PF beats fixed-2R across most of the basket; else REJECTED.
-// THE CHANGE — single full position, fixed 2R target, stop ratchets UP:
-//            maxR < 1.0R (inArmR)        -> SL = initial structural stop
-//            reach 1.0R                  -> SL = COST (entry / breakeven)
-//            reach 1.5R (arm + stepR)    -> SL = 1.0R (lock 1R)
-//            reach 2.0R (inTargetR)      -> FULL BOOK at the limit target
-//            Stop hit before 2R -> exit at that (ratcheted) stop. Trend-break closes
-//            any open position. maxR = highest favourable excursion in R (bar HIGH).
+// THE CHANGE — single full position, fixed 2R target, ONE breakeven move:
+//            maxR < 1.0R (inArmR)   -> SL = initial structural stop
+//            reach 1.0R             -> SL = COST (entry / breakeven). NOTHING in between.
+//            reach 2.0R (inTargetR) -> FULL BOOK at the limit target
+//            Stop hit before 2R -> exit at cost (BE) or the initial stop. Trend-break
+//            closes any open position. maxR = highest favourable excursion in R (bar HIGH).
 // SAME      : ribbon regime filter, pullback+2-bar-confirm entry, structural
 //            ATR-floored INITIAL stop, R = entry - stop, fixed 2R target, risk-based
 //            share sizing, long-only, instrumentation, costs. Stop GEOMETRY unchanged;
-//            only upward ratcheting added (math.max).
-// NON-REPAINT: maxR uses this bar's completed HIGH; ratcheted stop applies on
-//            SUBSEQUENT bars; orders fill at the confirmed bar close (POOC). Up-only stop.
+//            only the single upward move to cost is added (math.max).
+// NON-REPAINT: maxR uses this bar's completed HIGH; the BE stop applies on SUBSEQUENT
+//            bars; orders fill at the confirmed bar close (POOC). Up-only stop.
 // =============================================================================
 strategy(
-     title                   = "Stock Swing — 2R Book + Step-Trail (daily, long-only)",
-     shorttitle              = "Swing2RT",
+     title                   = "Stock Swing — 2R Book + Breakeven (daily, long-only)",
+     shorttitle              = "Swing2RB",
      overlay                 = true,
      pyramiding              = 0,
      calc_on_every_tick      = false,
@@ -46,13 +45,13 @@ strategy(
 
 // =============================================================================
 // === 1. INPUTS ===
-// Mechanism params: pullbackAtr, atrMult, armR, stepR, targetR. Ribbon/ATR/swing
-// LENGTHS, riskPct, confirmWin and selectors are STRUCTURAL CONFIG. Ladder SET ONCE.
+// Mechanism params: pullbackAtr, atrMult, armR, targetR. Ribbon/ATR/swing LENGTHS,
+// riskPct, confirmWin and selectors are STRUCTURAL CONFIG. Levels SET ONCE.
 // =============================================================================
 GRP_BIAS    = "Regime (EMA ribbon)"
 GRP_ENTRY   = "Entry (pullback)"
 GRP_RISK    = "Risk / stop"
-GRP_EXIT    = "2R book + step-trail"
+GRP_EXIT    = "2R book + breakeven"
 GRP_SIZE    = "Position sizing"
 GRP_DISPLAY = "Display"
 
@@ -74,10 +73,8 @@ inSwingLook   = input.int(10, "Swing-low lookback", minval = 2, group = GRP_RISK
 inSwingBufAtr = input.float(0.25, "Swing buffer (ATR)", minval = 0.0, step = 0.05, group = GRP_RISK, tooltip = "config")
 inAtrMult     = input.float(1.5, "Min stop distance (ATR)", minval = 0.1, step = 0.1, group = GRP_RISK, tooltip = "Floor on R (initial stop). [edge param]")
 
-inArmR    = input.float(1.0, "Arm at (R) -> SL to cost", minval = 0.25, step = 0.25, group = GRP_EXIT,
-     tooltip = "When max favourable excursion reaches this many R, move the stop to COST (breakeven). [mechanism param]")
-inStepR   = input.float(0.5, "Trail step (R)", minval = 0.25, step = 0.25, group = GRP_EXIT,
-     tooltip = "After arming, each further step ratchets the stop up, trailing this many R behind. e.g. at 1.5R -> SL 1.0R. [mechanism param]")
+inArmR    = input.float(1.0, "Move SL to cost at (R)", minval = 0.25, step = 0.25, group = GRP_EXIT,
+     tooltip = "When max favourable excursion reaches this many R, move the stop to COST (breakeven). Nothing else in between. [mechanism param]")
 inTargetR = input.float(2.0, "Full-book target (R)", minval = 0.5, step = 0.1, group = GRP_EXIT,
      tooltip = "Fixed take-profit: book the FULL position here. [mechanism param]")
 
@@ -85,10 +82,10 @@ inRiskPct = input.float(1.0, "Risk % of equity per trade", minval = 0.1, maxval 
      tooltip = "shares = floor(equity*risk% / stop-distance), capped at no-leverage. Sizing, not an edge param.")
 
 inShowEmas    = input.bool(true,  "Show ribbon EMAs", group = GRP_DISPLAY)
-inShowTp      = input.bool(true,  "Show SL + target + R-milestone lines", group = GRP_DISPLAY)
+inShowTp      = input.bool(true,  "Show SL + target + 1R-arm line", group = GRP_DISPLAY)
 inShowSignals = input.bool(false, "Show signal markers (debug)", group = GRP_DISPLAY)
 inShowDebug   = input.bool(false, "Show debug panels (funnel/exit/MFE/size)", group = GRP_DISPLAY)
-inAlertTag    = input.string("STOCK SWING 2RT", "Alert tag", group = GRP_DISPLAY)
+inAlertTag    = input.string("STOCK SWING 2RB", "Alert tag", group = GRP_DISPLAY)
 
 // =============================================================================
 // === 2. INDICATORS / DATA ===
@@ -126,8 +123,8 @@ posOpen = strategy.position_size != 0
 sigLong = trigLong and not posOpen
 
 // =============================================================================
-// === 5. RISK, SIZING & 2R-BOOK + STEP-TRAIL EXIT STATE ===
-// Structural ATR-floored INITIAL stop (UNCHANGED). Fixed 2R target. Stop ratchets up.
+// === 5. RISK, SIZING & 2R-BOOK + BREAKEVEN EXIT STATE ===
+// Structural ATR-floored INITIAL stop (UNCHANGED). Fixed 2R target. SL -> cost at 1R.
 // =============================================================================
 var int    posDir        = 0
 var float  entryPx       = na
@@ -137,7 +134,7 @@ var float  targetPx      = na          // fixed full-book target (2R)
 var float  posShares     = na
 var int    entryBarIdx   = na
 var string pendingReason = na
-var float  stopLevel     = na          // ratcheting (step-trail) stop
+var float  stopLevel     = na          // initial stop, then cost (breakeven) after 1R
 var float  hhSince        = na         // highest high since entry
 // snapshots for the exit classifier (survive a same-bar re-entry)
 var float  closingR      = na
@@ -167,18 +164,13 @@ if doEnterLong
     stopLevel     := candInitStop
     hhSince       := high
 
-// STEP-TRAIL ladder: ratchet the stop up as max favourable excursion (in R) grows.
-// maxR<arm -> initial stop ; arm<=maxR<arm+step -> cost ; beyond -> trail one step behind.
-// (The 2R limit books the position before the trail climbs past the 1R lock.)
-// Non-repaint: hhSince/high completed; stop applies on subsequent bars; UP-only.
+// BREAKEVEN move: once max favourable excursion reaches 1R, move the stop to COST.
+// Nothing in between (no trailing); the 2R limit books the full position. Non-repaint:
+// hhSince/high completed; the BE stop applies on subsequent bars; UP-only (math.max).
 if posOpen and posDir == 1 and rVal > 0
     hhSince := math.max(hhSince, high)
     maxFavR = (hhSince - entryPx) / rVal
-    targetSL = initStop
-    if maxFavR >= inArmR
-        n = math.floor((maxFavR - inArmR) / inStepR)         // n=0 -> just armed (cost); n>=1 -> trailing
-        slR = n <= 0 ? 0.0 : inArmR + (n - 1) * inStepR      // locked R level: 0(cost),1.0,1.5,...
-        targetSL := entryPx + slR * rVal
+    targetSL = maxFavR >= inArmR ? entryPx : initStop         // at 1R -> cost; else initial stop
     stopLevel := math.max(stopLevel, targetSL)               // ratchet UP only
 
 // snapshot live levels for the classifier
@@ -192,8 +184,8 @@ trendBreak = posOpen and posDir == 1 and not longEligible
 // =============================================================================
 // === 6. ORDERS ===
 // Entry market (fills at this bar's close, POOC). Single full-position bracket: fixed
-// 2R limit + the ratcheting stop. strategy.close on trend-break. Same-bar stop+limit
-// -> TV fills STOP FIRST (conservative). Non-repaint: orders on confirmed bars.
+// 2R limit + the stop (initial, then cost after 1R). strategy.close on trend-break.
+// Same-bar stop+limit -> TV fills STOP FIRST (conservative). Non-repaint.
 // =============================================================================
 if doEnterLong
     strategy.entry("Long", strategy.long, qty = posShares)
@@ -277,16 +269,14 @@ fConf   += nz(confirmLong ? 1 : 0)
 fSetup  += nz(setupLong ? 1 : 0)
 fFull   += nz(trigLong ? 1 : 0)
 
-// --- exit tally (target / stop / BE / trail / trendBreak) + BUY/EXIT labels ---
+// --- exit tally (target / stop / BE / trendBreak) + BUY/EXIT labels ---
 var int   cntTgt   = 0
 var int   cntStop  = 0
 var int   cntBE    = 0
-var int   cntTrail = 0
 var int   cntBreak = 0
 var float sumRTgt   = 0.0
 var float sumRStop  = 0.0
 var float sumRBE    = 0.0
-var float sumRTrail = 0.0
 var float sumRBreak = 0.0
 
 newOpened = strategy.opentrades > nz(strategy.opentrades[1])
@@ -299,23 +289,19 @@ if strategy.closedtrades > prevClosed
         reason = not na(pendingReason) ? "trendBreak"
              : (not na(capR) and capR >= inTargetR - 0.15) ? "target"
              : (na(capR) or capR <= -0.5) ? "stop"
-             : capR < 0.75 ? "BE"
-             : "trail"
+             : "BE"
         if reason == "target"
             cntTgt += 1
             sumRTgt += nz(capR)
         else if reason == "stop"
             cntStop += 1
             sumRStop += nz(capR)
-        else if reason == "BE"
-            cntBE += 1
-            sumRBE += nz(capR)
         else if reason == "trendBreak"
             cntBreak += 1
             sumRBreak += nz(capR)
         else
-            cntTrail += 1
-            sumRTrail += nz(capR)
+            cntBE += 1
+            sumRBE += nz(capR)
         rTxt = na(capR) ? "-" : str.tostring(capR, "#.##") + "R"
         label.new(strategy.closedtrades.exit_bar_index(ci), xp, "EXIT " + rTxt + "\n" + reason,
              xloc = xloc.bar_index, style = label.style_label_down, color = (not na(capR) and capR >= 0 ? color.new(color.orange, 0) : color.new(color.red, 0)),
@@ -333,33 +319,28 @@ if newOpened
          + "\nSL  "    + str.tostring(initStop, format.mintick) + "  (-" + str.tostring(entryPx - initStop, format.mintick) + " pts)"
          + "\nTarget " + str.tostring(targetPx, format.mintick) + "  (+" + str.tostring(targetPx - entryPx, format.mintick) + " pts, " + str.tostring(inTargetR) + "R)"
          + "\nR  " + str.tostring(rVal, format.mintick) + " pts"
-         + "\nLadder: " + str.tostring(inArmR) + "R->cost, " + str.tostring(inArmR + inStepR) + "R->1R, book@" + str.tostring(inTargetR) + "R"
+         + "\nRule: " + str.tostring(inArmR) + "R -> SL to cost (BE), book @ " + str.tostring(inTargetR) + "R"
     label.new(obar, opx, buyTxt, xloc = xloc.bar_index, style = label.style_label_up,
          color = color.new(color.green, 0), textcolor = color.white, size = size.small, tooltip = buyTxt)
 
-// --- live SL (ratchets) + target + R-milestone lines; deleted when flat ---
+// --- live SL (->cost after 1R) + target + 1R-arm reference line; deleted when flat ---
 var line slLn = na
 var line tgLn = na
 var line m1Ln = na
-var line m2Ln = na
 if posOpen and inShowTp
     line.delete(slLn)
     line.delete(tgLn)
     line.delete(m1Ln)
-    line.delete(m2Ln)
     slLn := line.new(entryBarIdx, stopLevel,            bar_index, stopLevel,            xloc = xloc.bar_index, color = color.new(color.red,   0),  style = line.style_dashed, width = 1)
     tgLn := line.new(entryBarIdx, targetPx,             bar_index, targetPx,             xloc = xloc.bar_index, color = color.new(color.green, 0),  style = line.style_dashed, width = 1)
-    m1Ln := line.new(entryBarIdx, entryPx + 1.0 * rVal, bar_index, entryPx + 1.0 * rVal, xloc = xloc.bar_index, color = color.new(color.green, 55), style = line.style_dotted, width = 1)
-    m2Ln := line.new(entryBarIdx, entryPx + 1.5 * rVal, bar_index, entryPx + 1.5 * rVal, xloc = xloc.bar_index, color = color.new(color.green, 35), style = line.style_dotted, width = 1)
+    m1Ln := line.new(entryBarIdx, entryPx + inArmR * rVal, bar_index, entryPx + inArmR * rVal, xloc = xloc.bar_index, color = color.new(color.green, 50), style = line.style_dotted, width = 1)
 else
     line.delete(slLn)
     line.delete(tgLn)
     line.delete(m1Ln)
-    line.delete(m2Ln)
     slLn := na
     tgLn := na
     m1Ln := na
-    m2Ln := na
 
 // --- debug panels ---
 var table funT = na
@@ -382,7 +363,7 @@ if inShowDebug and barstate.islast
 var table exT = na
 if inShowDebug and barstate.islast
     if na(exT)
-        exT := table.new(position.middle_right, 3, 6, border_width = 1)
+        exT := table.new(position.middle_right, 3, 5, border_width = 1)
     table.cell(exT, 0, 0, "EXIT", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(exT, 1, 0, "N",    bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(exT, 2, 0, "avgR", bgcolor = color.gray, text_color = color.white, text_size = size.small)
@@ -395,12 +376,9 @@ if inShowDebug and barstate.islast
     table.cell(exT, 0, 3, "BE (cost)", text_size = size.small)
     table.cell(exT, 1, 3, str.tostring(cntBE), text_size = size.small)
     table.cell(exT, 2, 3, cntBE > 0 ? str.tostring(sumRBE / cntBE, "#.##") : "-", text_size = size.small)
-    table.cell(exT, 0, 4, "trail (1R lk)", text_size = size.small)
-    table.cell(exT, 1, 4, str.tostring(cntTrail), text_size = size.small)
-    table.cell(exT, 2, 4, cntTrail > 0 ? str.tostring(sumRTrail / cntTrail, "#.##") : "-", text_size = size.small)
-    table.cell(exT, 0, 5, "trendBreak", text_size = size.small)
-    table.cell(exT, 1, 5, str.tostring(cntBreak), text_size = size.small)
-    table.cell(exT, 2, 5, cntBreak > 0 ? str.tostring(sumRBreak / cntBreak, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 4, "trendBreak", text_size = size.small)
+    table.cell(exT, 1, 4, str.tostring(cntBreak), text_size = size.small)
+    table.cell(exT, 2, 4, cntBreak > 0 ? str.tostring(sumRBreak / cntBreak, "#.##") : "-", text_size = size.small)
 
 var table mfeT = na
 if inShowDebug and barstate.islast
@@ -433,7 +411,7 @@ if inShowDebug and barstate.islast
     if na(pT)
         pT := table.new(position.top_right, 2, 7, border_width = 1)
     curMaxR = (posOpen and not na(rVal) and rVal > 0) ? (hhSince - entryPx) / rVal : na
-    table.cell(pT, 0, 0, "SWING-2RT", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(pT, 0, 0, "SWING-2RB", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(pT, 1, 0, longEligible ? "UPTREND" : "no-trade", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(pT, 0, 1, "R / share", text_size = size.small)
     table.cell(pT, 1, 1, candR > 0 ? str.tostring(candR, format.mintick) : "-", text_size = size.small)
@@ -444,7 +422,7 @@ if inShowDebug and barstate.islast
     table.cell(pT, 0, 4, "Max R",     text_size = size.small)
     table.cell(pT, 1, 4, not na(curMaxR) ? str.tostring(curMaxR, "#.##") + "R" : "-", text_size = size.small)
     table.cell(pT, 0, 5, "Stop now",  text_size = size.small)
-    table.cell(pT, 1, 5, posOpen ? str.tostring(math.round(stopLevel)) + "  (" + (not na(curMaxR) and curMaxR < inArmR ? "init" : not na(curMaxR) and curMaxR < inArmR + inStepR ? "cost" : "trail") + ")" : "-", text_size = size.small)
+    table.cell(pT, 1, 5, posOpen ? str.tostring(math.round(stopLevel)) + "  (" + (not na(curMaxR) and curMaxR >= inArmR ? "cost" : "init") + ")" : "-", text_size = size.small)
     pnl = posOpen ? math.round(close - entryPx) : 0
     table.cell(pT, 0, 6, "Open P&L/sh", text_size = size.small)
     table.cell(pT, 1, 6, posOpen ? str.tostring(pnl) + " pts" : "-", text_color = pnl >= 0 ? color.lime : color.red, text_size = size.small)
