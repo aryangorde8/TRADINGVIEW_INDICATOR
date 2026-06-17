@@ -371,9 +371,17 @@ if newOpened
     oi  = strategy.opentrades - 1
     obar = strategy.opentrades.entry_bar_index(oi)
     opx  = strategy.opentrades.entry_price(oi)
-    label.new(obar, opx, "BUY", xloc = xloc.bar_index, style = label.style_label_up,
+    // DISPLAY ONLY: surface the trade levels the strategy already computed for THIS
+    // trade (entryPx / initStop / targetPx / rVal) into the label text. Nothing is
+    // recomputed — these are the same vars that drive strategy.exit and the SL/Tgt lines.
+    buyTxt = "BUY " + str.tostring(posShares) + " sh"
+         + "\nEntry  " + str.tostring(entryPx,  format.mintick)
+         + "\nSL  "    + str.tostring(initStop, format.mintick) + "  (-" + str.tostring(entryPx - initStop, format.mintick) + " pts)"
+         + "\nTarget " + str.tostring(targetPx, format.mintick) + "  (+" + str.tostring(targetPx - entryPx, format.mintick) + " pts)"
+         + "\nR  " + str.tostring(rVal, format.mintick) + " pts  (1:" + str.tostring(inRrTarget) + ")"
+    label.new(obar, opx, buyTxt, xloc = xloc.bar_index, style = label.style_label_up,
          color = color.new(color.green, 0), textcolor = color.white, size = size.small,
-         tooltip = "BUY @ " + str.tostring(opx, format.mintick) + "  (" + str.tostring(posShares) + " sh)")
+         tooltip = buyTxt)
 
 // --- live stop/target lines (deleted when flat) ---
 liveTgt = inUseRunner ? firstTgtPx : targetPx
