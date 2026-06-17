@@ -1,9 +1,9 @@
 //@version=6
 // =============================================================================
-// STOCK SWING — 3-TP 50/35/15 SCALE-OUT VARIANT (daily, CASH EQUITY, long-only)
+// STOCK SWING — 3-TP 50/30/20 SCALE-OUT VARIANT (daily, CASH EQUITY, long-only)
 // -----------------------------------------------------------------------------
 // PURPOSE  : HYPOTHESIS TEST, parallel to the validated fixed-2R baseline
-//            (src/stock_swing_ribbon_pullback.pine). Does a 3-target 50/35/15
+//            (src/stock_swing_ribbon_pullback.pine). Does a 3-target 50/30/20
 //            scale-out with a ratcheting stop beat a single fixed 2R on profit
 //            factor across the validated basket? Exact copy of the baseline with
 //            ONLY the exit logic changed. NOT a tuning fork.
@@ -12,12 +12,12 @@
 //            is AGAINST it. Adopt ONLY if PF beats fixed-2R across most of the
 //            basket; else REJECTED and we deploy fixed-2R.
 // THE CHANGE — three partial targets with a ratcheting stop:
-//            TP1 @ 1.50R book inTp1Pct (50%) -> move stop to ENTRY (breakeven)
-//            TP2 @ 2.00R book inTp2Pct (35%) -> move stop to TP1 (lock 1.5R)
-//            TP3 @ 2.25R book the REST (~15%) -> trade fully closed
+//            TP1 @ 1.80R book inTp1Pct (50%) -> move stop to ENTRY (breakeven)
+//            TP2 @ 2.20R book inTp2Pct (30%) -> move stop to TP1 (lock 1.8R)
+//            TP3 @ 2.50R book the REST (~20%) -> trade fully closed
 //            Stop hit at any stage -> exit remaining at that stop. Trend-break still
 //            closes any remainder. Ratcheting stop tracked in a var, updated per TP.
-// SAME-BAR  : TP2 (2.0R) and TP3 (2.25R) are only 0.25R apart — a single bar can blow
+// SAME-BAR  : TP2 (2.2R) and TP3 (2.5R) are only 0.3R apart — a single bar can blow
 //   MULTI     through BOTH. Handled explicitly: each TP flag is tested INDEPENDENTLY
 //   FILL      against this bar's high, and the TP limit orders REST from the prior bar
 //            so the emulator fills both on that bar regardless of resubmission. The
@@ -32,7 +32,7 @@
 //            confirmed bar close (process_orders_on_close). No lookahead.
 // =============================================================================
 strategy(
-     title                   = "Stock Swing — 3-TP 50/35/15 Scale-out (daily, long-only)",
+     title                   = "Stock Swing — 3-TP 50/30/20 Scale-out (daily, long-only)",
      shorttitle              = "Swing3TP",
      overlay                 = true,
      pyramiding              = 0,
@@ -58,7 +58,7 @@ strategy(
 GRP_BIAS    = "Regime (EMA ribbon)"
 GRP_ENTRY   = "Entry (pullback)"
 GRP_RISK    = "Risk / stop"
-GRP_TP      = "3-TP scale-out (50/35/15)"
+GRP_TP      = "3-TP scale-out (50/30/20)"
 GRP_SIZE    = "Position sizing"
 GRP_DISPLAY = "Display"
 
@@ -80,11 +80,11 @@ inSwingLook   = input.int(10, "Swing-low lookback", minval = 2, group = GRP_RISK
 inSwingBufAtr = input.float(0.25, "Swing buffer (ATR)", minval = 0.0, step = 0.05, group = GRP_RISK, tooltip = "config")
 inAtrMult     = input.float(1.5, "Min stop distance (ATR)", minval = 0.1, step = 0.1, group = GRP_RISK, tooltip = "Floor on R. [edge param]")
 
-inTp1R   = input.float(1.50, "TP1 (R)", minval = 0.5, step = 0.05, group = GRP_TP, tooltip = "Book inTp1Pct here; then stop -> entry (BE). [mechanism param]")
-inTp2R   = input.float(2.00, "TP2 (R)", minval = 0.5, step = 0.05, group = GRP_TP, tooltip = "Book inTp2Pct here; then stop -> TP1 (lock 1.5R). [mechanism param]")
-inTp3R   = input.float(2.25, "TP3 (R)", minval = 0.5, step = 0.05, group = GRP_TP, tooltip = "Book the REST (~15%) here; trade fully closed. Only 0.25R above TP2 — same-bar double-fill handled. [mechanism param]")
+inTp1R   = input.float(1.80, "TP1 (R)", minval = 0.5, step = 0.05, group = GRP_TP, tooltip = "Book inTp1Pct here; then stop -> entry (BE). [mechanism param]")
+inTp2R   = input.float(2.20, "TP2 (R)", minval = 0.5, step = 0.05, group = GRP_TP, tooltip = "Book inTp2Pct here; then stop -> TP1 (lock 1.8R). [mechanism param]")
+inTp3R   = input.float(2.50, "TP3 (R)", minval = 0.5, step = 0.05, group = GRP_TP, tooltip = "Book the REST (~20%) here; trade fully closed. Only 0.3R above TP2 — same-bar double-fill handled. [mechanism param]")
 inTp1Pct = input.float(50.0, "TP1 book %", minval = 1.0, maxval = 98.0, step = 1.0, group = GRP_TP, tooltip = "[mechanism param]")
-inTp2Pct = input.float(35.0, "TP2 book %", minval = 1.0, maxval = 98.0, step = 1.0, group = GRP_TP, tooltip = "TP3 books the remainder (100 - TP1% - TP2% = ~15%). [mechanism param]")
+inTp2Pct = input.float(30.0, "TP2 book %", minval = 1.0, maxval = 98.0, step = 1.0, group = GRP_TP, tooltip = "TP3 books the remainder (100 - TP1% - TP2% = ~20%). [mechanism param]")
 
 inRiskPct = input.float(1.0, "Risk % of equity per trade", minval = 0.1, maxval = 10.0, step = 0.1, group = GRP_SIZE,
      tooltip = "shares = floor(equity*risk% / stop-distance), capped at no-leverage. Sizing, not an edge param.")
@@ -192,7 +192,7 @@ if doEnterLong
     s2 := math.min(s2, candShares - s1 - 1.0)                // keep >=1 share for TP3 remainder
     tp1Sh         := s1
     tp2Sh         := s2
-    tp3Sh         := candShares - s1 - s2                    // TP3 books the rest (~15%)
+    tp3Sh         := candShares - s1 - s2                    // TP3 books the rest (~20%)
     stopLevel     := candInitStop
     t1Done        := false
     t2Done        := false
@@ -205,7 +205,7 @@ if doEnterLong
     summaryPending := true
 
 // ratchet the stop as TPs are reached. Each flag is tested INDEPENDENTLY against this
-// bar's high, so a single bar that blows through TP2 (2.0R) AND TP3 (2.25R) sets both
+// bar's high, so a single bar that blows through TP2 (2.2R) AND TP3 (2.5R) sets both
 // flags; stopLevel then recomputes from the HIGHEST flag — order-independent, same-bar
 // safe. The TP limit orders rest from the prior bar so both fill on that bar. Non-repaint.
 if posOpen and posDir == 1 and rVal > 0
@@ -342,7 +342,7 @@ if strategy.closedtrades > prevClosed
         xp    = strategy.closedtrades.exit_price(ci)
         ep2   = strategy.closedtrades.entry_price(ci)
         legSz = strategy.closedtrades.size(ci)
-        // midpoint-based classification (TP2/TP3 only 0.25R apart -> use nearest level)
+        // midpoint-based classification (TP2/TP3 only 0.3R apart -> use nearest level)
         mTp23 = (cTp2 + cTp3) / 2.0
         mTp12 = (cTp1 + cTp2) / 2.0
         mEnT1 = (cEntry + cTp1) / 2.0
@@ -380,7 +380,7 @@ if strategy.closedtrades > prevClosed
         sCol = accRW >= 0 ? color.new(color.orange, 0) : color.new(color.red, 0)
         label.new(bar_index, low, "EXIT  " + str.tostring(accRW, "#.##") + "R  (" + str.tostring(math.round(accPtsW)) + " pts)\nlegs: " + accLegs,
              xloc = xloc.bar_index, style = label.style_label_up, color = sCol, textcolor = color.black, size = size.small,
-             tooltip = "Weighted total across booked legs (50/35/15). legs filled: " + accLegs)
+             tooltip = "Weighted total across booked legs (50/30/20). legs filled: " + accLegs)
         summaryPending := false
 
 if newOpened
@@ -444,13 +444,13 @@ if inShowDebug and barstate.islast
     table.cell(exT, 0, 0, "EXIT leg", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(exT, 1, 0, "N",    bgcolor = color.gray, text_color = color.white, text_size = size.small)
     table.cell(exT, 2, 0, "avgR", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(exT, 0, 1, "tp1 (1.5R)", text_size = size.small)
+    table.cell(exT, 0, 1, "tp1 (1.8R)", text_size = size.small)
     table.cell(exT, 1, 1, str.tostring(cntTp1), text_size = size.small)
     table.cell(exT, 2, 1, cntTp1 > 0 ? str.tostring(sumRTp1 / cntTp1, "#.##") : "-", text_size = size.small)
-    table.cell(exT, 0, 2, "tp2 (2R)", text_size = size.small)
+    table.cell(exT, 0, 2, "tp2 (2.2R)", text_size = size.small)
     table.cell(exT, 1, 2, str.tostring(cntTp2), text_size = size.small)
     table.cell(exT, 2, 2, cntTp2 > 0 ? str.tostring(sumRTp2 / cntTp2, "#.##") : "-", text_size = size.small)
-    table.cell(exT, 0, 3, "tp3 (2.25R)", text_size = size.small)
+    table.cell(exT, 0, 3, "tp3 (2.5R)", text_size = size.small)
     table.cell(exT, 1, 3, str.tostring(cntTp3), text_size = size.small)
     table.cell(exT, 2, 3, cntTp3 > 0 ? str.tostring(sumRTp3 / cntTp3, "#.##") : "-", text_size = size.small)
     table.cell(exT, 0, 4, "BE", text_size = size.small)
@@ -504,7 +504,7 @@ if inShowDebug and barstate.islast
     table.cell(pT, 0, 4, "In position", text_size = size.small)
     table.cell(pT, 1, 4, posOpen ? str.tostring(strategy.position_size) + " sh @ " + str.tostring(math.round(entryPx)) : "flat", text_color = posOpen ? color.lime : color.gray, text_size = size.small)
     table.cell(pT, 0, 5, "Stop now",  text_size = size.small)
-    table.cell(pT, 1, 5, posOpen ? str.tostring(math.round(stopLevel)) + (t2Done ? " (lk1.5R)" : t1Done ? " (BE)" : " (init)") : "-", text_size = size.small)
+    table.cell(pT, 1, 5, posOpen ? str.tostring(math.round(stopLevel)) + (t2Done ? " (lk1.8R)" : t1Done ? " (BE)" : " (init)") : "-", text_size = size.small)
     pnl = posOpen ? math.round(close - entryPx) : 0
     table.cell(pT, 0, 6, "Open P&L/sh", text_size = size.small)
     table.cell(pT, 1, 6, posOpen ? str.tostring(pnl) + " pts" : "-", text_color = pnl >= 0 ? color.lime : color.red, text_size = size.small)
