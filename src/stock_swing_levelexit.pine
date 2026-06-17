@@ -1,0 +1,497 @@
+//@version=6
+// =============================================================================
+// STOCK SWING — LEVEL-EXIT VARIANT (daily, CASH EQUITY, long-only)
+// -----------------------------------------------------------------------------
+// PURPOSE  : HYPOTHESIS TEST, parallel to the validated fixed-2R baseline
+//            (src/stock_swing_ribbon_pullback.pine). Do CHART-LEVEL-BASED targets
+//            (nearest prior swing high) beat a fixed 2R on expectancy / profit
+//            factor across the validated basket? This file is an EXACT COPY of the
+//            baseline with ONLY the target/exit logic changed. NOT a tuning fork:
+//            level/bound params are set once, never optimised toward a result.
+// THE ONE   : target = nearest prior SWING HIGH above entry (rolling highest over a
+//   CHANGE    fixed lookback), exited just BELOW it (small ATR buffer). Bounds:
+//            - min reward: if the level is < inMinRr*R away -> SKIP (no sub-1R setups);
+//            - max: if > inMaxRr*R away -> CAP the target at inMaxRr*R;
+//            - fallback: if NO qualifying level above entry -> SKIP (never silently 2R).
+//            Skips are COUNTED and shown in the funnel panel.
+// SAME      : ribbon regime filter, pullback+2-bar-confirm entry, structural
+//            ATR-floored stop, R = entry - stop, risk-based share sizing, long-only,
+//            runner OFF, all instrumentation, costs. Stop is UNCHANGED.
+// NON-REPAINT (the level): priorSwingHigh = ta.highest(high[1], inLevelLookback) =
+//            the highest high over the window ENDING ON THE PREVIOUS BAR. It reads
+//            ONLY bars strictly BEFORE the entry bar, so the level is established
+//            pre-entry and cannot be revised by future data. We deliberately do NOT
+//            use ta.pivothigh() — a pivot confirms `rightbars` bars LATER, which would
+//            reference post-entry data (lookahead). "Swing high" = rolling extreme,
+//            symmetric with the swingLow used for the stop. Orders fill at the
+//            confirmed bar close (process_orders_on_close).
+// =============================================================================
+strategy(
+     title                   = "Stock Swing — Level Exit (daily, long-only)",
+     shorttitle              = "SwingLVL",
+     overlay                 = true,
+     pyramiding              = 0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,
+     initial_capital         = 1000000,                       // INR 10 lakh
+     default_qty_type        = strategy.fixed,                // qty is computed per-trade (risk-based) and passed to strategy.entry
+     default_qty_value       = 1,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.2,                           // ~0.2%/side delivery all-in (STT ~0.1% + brokerage/charges ~0.1%); tune per broker
+     slippage                = 5,
+     currency                = currency.INR,
+     max_labels_count        = 500,
+     max_lines_count         = 500,
+     close_entries_rule      = "ANY")
+
+// =============================================================================
+// === 1. INPUTS ===
+// Edge params (the ones one might curve-fit): pullbackAtr, atrMult, levelLookback,
+// levelBufAtr, minRr, maxRr (+ runner firstTgtR/trailAtrMult when runner ON). Ribbon/
+// ATR/swing LENGTHS, riskPct, confirmWin and categorical selectors are STRUCTURAL
+// CONFIG — not to be optimised. Level/bound params are SET ONCE, not tuned to a result.
+// =============================================================================
+GRP_BIAS    = "Regime (EMA ribbon)"
+GRP_ENTRY   = "Entry (pullback)"
+GRP_RISK    = "Risk / target"
+GRP_RUNNER  = "Runner exit"
+GRP_SIZE    = "Position sizing"
+GRP_DISPLAY = "Display"
+
+inDirection  = input.string("long_only", "Direction (DEPLOYABLE = long_only)", options = ["long_only", "short_only", "both"], group = GRP_BIAS,
+     tooltip = "long_only (DEFAULT) = the tested edge. short_only / both are tested-and-rejected (see stock_swing_short_futures.pine / FINDINGS_STOCKS.md). short_only here = no trades; both = behaves long-only.")
+inRibbonMode = input.string("light", "Ribbon mode", options = ["full", "light", "minimal"], group = GRP_BIAS,
+     tooltip = "Bullish-trend FILTER (persistent, NOT the entry). full = 20>50>100>200; light = 20>50>200; minimal = 20>50. ALL modes also require close > the long-term EMA (200). Price is NOT required above the FAST EMA — that is where the pullback happens.")
+inEma1 = input.int(20,  "EMA fast (pullback ref)", minval = 2,  group = GRP_BIAS, tooltip = "config")
+inEma2 = input.int(50,  "EMA 2",                   minval = 3,  group = GRP_BIAS, tooltip = "config")
+inEma3 = input.int(100, "EMA 3",                   minval = 5,  group = GRP_BIAS, tooltip = "config")
+inEma4 = input.int(200, "EMA slow (trend anchor)", minval = 10, group = GRP_BIAS, tooltip = "config")
+
+inPullbackEma = input.string("20", "Pull-back to EMA", options = ["20", "50"], group = GRP_ENTRY,
+     tooltip = "Which EMA the bar's low must tag. 20 = shallow pullbacks (more trades); 50 = deeper (fewer).")
+inPullbackAtr = input.float(0.5, "Pull-back tag tolerance (ATR)", minval = 0.0, step = 0.05, group = GRP_ENTRY,
+     tooltip = "How close (ATR units) the bar's low must come to the pull-back EMA to count as a tag. [edge param]")
+inConfirmWin  = input.int(3, "Confirm window (bars)", minval = 0, group = GRP_ENTRY,
+     tooltip = "After a tag arms, the bullish-resume bar may appear on the tag bar OR within this many following bars while the ribbon holds. Daily default 3. config")
+
+inAtrLen      = input.int(14, "ATR length", minval = 1, group = GRP_RISK, tooltip = "config")
+inSwingLook   = input.int(10, "Swing-low lookback", minval = 2, group = GRP_RISK, tooltip = "Bars for the pullback swing low (structural stop). config")
+inSwingBufAtr = input.float(0.25, "Swing buffer (ATR)", minval = 0.0, step = 0.05, group = GRP_RISK, tooltip = "Stop placed this far below the swing low so wicks don't clip it. config")
+inAtrMult     = input.float(1.5, "Min stop distance (ATR)", minval = 0.1, step = 0.1, group = GRP_RISK,
+     tooltip = "Floor on R: stop never tighter than this*ATR (structural swing stop used when WIDER). [edge param]")
+// --- LEVEL-BASED TARGET (this variant's only change vs fixed-2R) ---
+inLevelLookback = input.int(20, "Level lookback (prior swing high)", minval = 2, group = GRP_RISK,
+     tooltip = "Bars back (ending on the PREVIOUS bar) for the prior swing high used as the target level. Non-repaint: reads only bars before entry. [edge param]")
+inLevelBufAtr   = input.float(0.1, "Level buffer (ATR, exit below level)", minval = 0.0, step = 0.05, group = GRP_RISK,
+     tooltip = "Exit this far (ATR) BELOW the swing-high level, to book before price stalls at the level. [edge param]")
+inMinRr         = input.float(1.0, "Min reward (R) — else SKIP", minval = 0.1, step = 0.1, group = GRP_RISK,
+     tooltip = "If the level is closer than this*R, the reward is too small — SKIP the trade (no sub-1R setups). Skips are counted in the funnel. [edge param]")
+inMaxRr         = input.float(4.0, "Max reward (R) — else CAP", minval = 0.5, step = 0.5, group = GRP_RISK,
+     tooltip = "If the level is further than this*R, CAP the target at this*R so one outlier level doesn't distort. [edge param]")
+
+inUseRunner    = input.bool(false, "Use runner (partial + trail)", group = GRP_RUNNER,
+     tooltip = "OFF (default, as the baseline) = single level target. ON = book bookFrac at firstTgtR, let the rest run on a loose chandelier.")
+inBookFrac     = input.float(50.0, "Book % at first target", minval = 1.0, maxval = 99.0, step = 5.0, group = GRP_RUNNER)
+inFirstTgtR    = input.float(2.0, "First target (R)", minval = 0.5, step = 0.5, group = GRP_RUNNER, tooltip = "Runner books here. [edge param when runner on]")
+inTrailAtrMult = input.float(3.0, "Runner trail ATR mult", minval = 0.5, step = 0.5, group = GRP_RUNNER,
+     tooltip = "Chandelier distance (highest-high-since-entry - mult*ATR). Keep LOOSE for fat trend tails. [edge param when runner on]")
+
+inRiskPct = input.float(1.0, "Risk % of equity per trade", minval = 0.1, maxval = 10.0, step = 0.1, group = GRP_SIZE,
+     tooltip = "shares = floor(equity*risk% / stop-distance-per-share), capped at no-leverage (equity/price). Sizing, not an edge param.")
+
+inShowEmas    = input.bool(true,  "Show ribbon EMAs", group = GRP_DISPLAY)
+inShowTp      = input.bool(true,  "Show stop/target lines", group = GRP_DISPLAY)
+inShowSignals = input.bool(false, "Show signal markers (debug)", group = GRP_DISPLAY)
+inShowDebug   = input.bool(false, "Show debug panels (funnel/exit/MFE/size)", group = GRP_DISPLAY)
+inAlertTag    = input.string("STOCK SWING LVL", "Alert tag", group = GRP_DISPLAY)
+
+// =============================================================================
+// === 2. INDICATORS / DATA ===
+// All on completed-bar values; each computed once, unconditionally.
+// =============================================================================
+ema1 = ta.ema(close, inEma1)
+ema2 = ta.ema(close, inEma2)
+ema3 = ta.ema(close, inEma3)
+ema4 = ta.ema(close, inEma4)
+atrVal   = ta.atr(inAtrLen)
+swingLow = ta.lowest(low, inSwingLook)
+pullEma  = inPullbackEma == "20" ? ema1 : ema2
+
+// =============================================================================
+// === 3. REGIME FILTER (persistent uptrend state — NOT the entry) ===
+// Ribbon stacked bullish + price above the long-term anchor (200). Price is NOT
+// required above the fast EMA (the pullback tags it). dataReady gates warm-up.
+// Non-repaint: EMAs/close are completed-bar values.
+// =============================================================================
+dataReady = not na(ema4) and not na(atrVal)
+ribbonBull = switch inRibbonMode
+    "full"    => ema1 > ema2 and ema2 > ema3 and ema3 > ema4 and close > ema4
+    "minimal" => ema1 > ema2 and close > ema4
+    => ema1 > ema2 and ema2 > ema4 and close > ema4          // "light"
+longEligible = dataReady and ribbonBull
+
+// =============================================================================
+// === 4. SIGNAL LOGIC ===
+// Entry = pullback tag (bar low reaches the pull EMA) + a bullish resume bar (close
+// back above the pull EMA), within a 2..N-bar confirm window, while the regime holds.
+// Non-repaint: low/open/close are the COMPLETED bar's OHLC; pullEma/atrVal completed;
+// decided at bar close (orders fill at that close) -> cannot move on a later tick.
+// =============================================================================
+tagLong     = low  <= pullEma + inPullbackAtr * atrVal       // bar dipped to/near the pull EMA
+confirmLong = close > pullEma and close > open               // bullish resume back above the pull EMA
+setupLong   = longEligible and tagLong                       // pullback armed within the uptrend
+
+var int armLong = 0
+trigLong  = longEligible and confirmLong and (setupLong or armLong > 0)
+armLong  := trigLong ? 0 : setupLong ? inConfirmWin : (armLong > 0 and longEligible) ? armLong - 1 : 0
+
+posOpen = strategy.position_size != 0
+sigLong = trigLong and not posOpen                           // only when flat (pyramiding=0)
+
+// =============================================================================
+// === 5. RISK, SIZING & EXITS ===
+// Structural stop below the pullback swing low (ATR-floored). Risk-based share count.
+// Target = nearest prior swing high (level) with min/max/fallback bounds. Optional
+// partial + chandelier runner. Trend-break (ribbon lost) is a hard exit.
+// =============================================================================
+var int    posDir          = 0
+var float  entryPx         = na
+var float  initStop        = na
+var float  rVal            = na
+var float  targetPx        = na
+var float  firstTgtPx      = na
+var float  runnerStop      = na
+var bool   t1Done          = false
+var float  hhSince         = na
+var float  posShares       = na
+var int    entryBarIdx     = na
+var string pendingReason   = na
+var float  closingTgt      = na
+var float  closingR        = na
+
+// candidate geometry + risk-based size (computed every bar; committed on entry)
+candStructStop = swingLow - inSwingBufAtr * atrVal
+candFloorStop  = close - inAtrMult * atrVal
+candInitStop   = math.min(candStructStop, candFloorStop)     // wider (lower) of the two
+candR          = close - candInitStop
+candRiskCash   = strategy.equity * inRiskPct / 100.0
+candMaxShares  = math.floor(strategy.equity / close)         // no leverage (cash equity)
+candShares     = candR > 0 ? math.max(0, math.min(math.floor(candRiskCash / candR), candMaxShares)) : 0
+allowLong      = inDirection == "long_only" or inDirection == "both"   // short rejected -> only long is deployable
+
+// --- LEVEL-BASED TARGET (the ONE change vs fixed-2R) ---
+// Non-repaint: priorSwingHigh reads high[1..lookback] -> only bars BEFORE the entry
+// bar. No pivot rightbars, no future data. See header note.
+priorSwingHigh = ta.highest(high[1], inLevelLookback)        // nearest prior swing high (rolling extreme), established pre-entry
+candLevelTgt   = priorSwingHigh - inLevelBufAtr * atrVal     // exit just BELOW the level
+candHasLevel   = not na(priorSwingHigh) and candLevelTgt > close            // a real resistance above entry (else SKIP)
+candLevelRr    = (candHasLevel and candR > 0) ? (candLevelTgt - close) / candR : na   // reward in R to the buffered level
+candRrTooSmall = candHasLevel and not na(candLevelRr) and candLevelRr < inMinRr        // reward < min -> SKIP
+candLevelOk    = candHasLevel and not candRrTooSmall and candR > 0                      // qualifies for entry
+candTargetPx   = candLevelOk ? (candLevelRr > inMaxRr ? close + inMaxRr * candR : candLevelTgt) : na  // cap outliers at maxRr
+
+doEnterLong    = sigLong and candShares >= 1 and allowLong and candLevelOk   // + must have a qualifying level target
+
+// fix geometry on the entry (resume) bar. Non-repaint: completed-bar values; close=fill.
+if doEnterLong
+    posDir        := 1
+    entryPx       := close
+    initStop      := candInitStop
+    rVal          := candR
+    targetPx      := candTargetPx                            // LEVEL target (capped/buffered), NOT fixed 2R
+    firstTgtPx    := close + inFirstTgtR * candR
+    posShares     := candShares
+    runnerStop    := candInitStop
+    t1Done        := false
+    hhSince       := high
+    entryBarIdx   := bar_index
+    pendingReason := na
+
+// runner stop (ONLY when inUseRunner): book at firstTgt, then BE + loose chandelier.
+// Non-repaint: hhSince/high/atrVal completed; new stop checked on SUBSEQUENT bars.
+if inUseRunner and posOpen and posDir == 1 and rVal > 0
+    hhSince := math.max(hhSince, high)
+    if not t1Done and high >= firstTgtPx
+        t1Done := true
+    runnerStop := t1Done ? math.max(runnerStop, math.max(entryPx, hhSince - inTrailAtrMult * atrVal)) : initStop
+
+// snapshot live levels so the exit-reason classifier survives a same-bar re-entry
+if posOpen
+    closingTgt := inUseRunner ? firstTgtPx : targetPx
+    closingR   := rVal
+
+// TREND-BREAK exit: the ribbon regime is lost -> close the swing (no time-stop; swing holds across days).
+// Non-repaint: longEligible from completed EMAs; close fills at this bar's close.
+trendBreak = posOpen and posDir == 1 and not longEligible
+
+// share split for the runner
+bookShares = math.max(1.0, math.min(posShares - 1.0, math.round(posShares * inBookFrac / 100.0)))
+runShares  = posShares - bookShares
+
+// =============================================================================
+// === 6. ORDERS ===
+// Entry: long = buy shares (risk-sized). Exit: level bracket OR partial+runner;
+// strategy.close on trend-break. Non-repaint: orders on confirmed bars; market entry
+// fills at THIS bar's close (process_orders_on_close). Same-bar stop+target -> TV
+// fills STOP FIRST (conservative); no bar-magnifier hacks.
+// =============================================================================
+if doEnterLong
+    strategy.entry("Long", strategy.long, qty = posShares)
+
+active = posOpen or doEnterLong
+if inUseRunner
+    if active and not t1Done and bookShares >= 1
+        strategy.exit("T1",  from_entry = "Long", qty = bookShares, stop = initStop,   limit = firstTgtPx, comment_profit = "target", comment_loss = "stop")
+    if active and runShares >= 1
+        strategy.exit("Run", from_entry = "Long", qty = runShares, stop = runnerStop,  comment_profit = "runnerTrail", comment_loss = "stop")
+else
+    if active
+        strategy.exit("Bracket", from_entry = "Long", stop = initStop, limit = targetPx, comment_profit = "target", comment_loss = "stop")
+
+if trendBreak
+    pendingReason := "trendBreak"
+    strategy.close("Long", comment = "trend break")
+
+// =============================================================================
+// === 7. PLOTTING + INSTRUMENTATION ===
+// =============================================================================
+// ribbon EMAs (context)
+plot(inShowEmas ? ema1 : na, "EMA fast", color = color.new(color.yellow, 0),  linewidth = 1)
+plot(inShowEmas ? ema2 : na, "EMA 2",    color = color.new(color.orange, 20), linewidth = 1)
+plot(inShowEmas ? ema3 : na, "EMA 3",    color = color.new(color.red,    40), linewidth = 1)
+plot(inShowEmas ? ema4 : na, "EMA slow", color = color.new(color.fuchsia,0),  linewidth = 2)
+bgcolor(longEligible ? color.new(color.green, 92) : na, title = "Uptrend regime")
+
+// --- debug signal markers (viz only; no order effect) ---
+ctxRejectLong = trigLong and posOpen   // trigger fired but already in a position
+plotshape(inShowSignals and trigLong,       title = "raw pullback", style = shape.circle,     location = location.belowbar, color = color.new(color.green, 60), size = size.tiny)
+plotshape(inShowSignals and doEnterLong,    title = "ENTER",        style = shape.triangleup, location = location.belowbar, color = color.new(color.lime,  0), size = size.tiny)
+plotshape(inShowSignals and ctxRejectLong,  title = "in-pos skip",  style = shape.xcross,     location = location.belowbar, color = color.new(color.gray,  0), size = size.tiny)
+
+// --- MFE/MAE shadow-tracker: how far entries run in R, IGNORING the target, until
+//     the -1R stop OR a trend-break (ribbon loss). Concurrent shadows in arrays. ---
+var array<float> mfeEntry = array.new_float()
+var array<float> mfeRpts  = array.new_float()
+var array<float> mfeStop  = array.new_float()
+var array<float> mfeMaxF  = array.new_float()
+var array<float> mfeMaxA  = array.new_float()
+var int   mfeN   = 0
+var int   mfeGe1 = 0
+var int   mfeGe2 = 0
+var int   mfeGe3 = 0
+var int   mfeGe4 = 0
+var int   mfeGe5 = 0
+var float mfeSumAdv = 0.0
+mfeI = 0
+while mfeI < array.size(mfeEntry)
+    e   = array.get(mfeEntry, mfeI)
+    rp  = array.get(mfeRpts, mfeI)
+    stp = array.get(mfeStop, mfeI)
+    favR = (high - e) / rp
+    advR = (e - low) / rp
+    array.set(mfeMaxF, mfeI, math.max(array.get(mfeMaxF, mfeI), favR))
+    array.set(mfeMaxA, mfeI, math.max(array.get(mfeMaxA, mfeI), advR))
+    if low <= stp or not longEligible
+        mx = array.get(mfeMaxF, mfeI)
+        mfeN   += 1
+        mfeGe1 += mx >= 1.0 ? 1 : 0
+        mfeGe2 += mx >= 2.0 ? 1 : 0
+        mfeGe3 += mx >= 3.0 ? 1 : 0
+        mfeGe4 += mx >= 4.0 ? 1 : 0
+        mfeGe5 += mx >= 5.0 ? 1 : 0
+        mfeSumAdv += array.get(mfeMaxA, mfeI)
+        array.remove(mfeEntry, mfeI)
+        array.remove(mfeRpts, mfeI)
+        array.remove(mfeStop, mfeI)
+        array.remove(mfeMaxF, mfeI)
+        array.remove(mfeMaxA, mfeI)
+    else
+        mfeI += 1
+if doEnterLong and candR > 0
+    array.push(mfeEntry, close)
+    array.push(mfeRpts, candR)
+    array.push(mfeStop, candInitStop)
+    array.push(mfeMaxF, 0.0)
+    array.push(mfeMaxA, 0.0)
+
+// --- entry funnel (cumulative bar-counts; na-guarded) + LEVEL-BOUND SKIPS ---
+var int fRibbon = 0
+var int fTag    = 0
+var int fConf   = 0
+var int fSetup  = 0
+var int fFull   = 0
+fRibbon += nz(longEligible ? 1 : 0)
+fTag    += nz(tagLong ? 1 : 0)
+fConf   += nz(confirmLong ? 1 : 0)
+fSetup  += nz(setupLong ? 1 : 0)
+fFull   += nz(trigLong ? 1 : 0)
+
+// level-bound skips: would-be entries (passed all baseline gates) rejected by the level logic
+var int fSkipNoLvl = 0   // no qualifying swing high above entry (fallback skip)
+var int fSkipMinRr = 0   // level closer than inMinRr*R (reward too small)
+wouldEnter  = sigLong and candShares >= 1 and allowLong
+fSkipNoLvl += (wouldEnter and not candHasLevel) ? 1 : 0
+fSkipMinRr += (wouldEnter and candRrTooSmall)   ? 1 : 0
+
+// --- exit-reason tally + BUY/EXIT labels off ACTUAL fills (per leg) ---
+var int   cntTarget = 0
+var int   cntRunner = 0
+var int   cntStop   = 0
+var int   cntBreak  = 0
+var float sumRTarget = 0.0
+var float sumRRunner = 0.0
+var float sumRStop   = 0.0
+var float sumRBreak  = 0.0
+
+newOpened = strategy.opentrades > nz(strategy.opentrades[1])
+var int prevClosed = 0
+if strategy.closedtrades > prevClosed
+    for ci = prevClosed to strategy.closedtrades - 1
+        xb = strategy.closedtrades.exit_bar_index(ci)
+        xp = strategy.closedtrades.exit_price(ci)
+        ep2 = strategy.closedtrades.entry_price(ci)
+        prof = strategy.closedtrades.profit(ci)
+        isTgt = not na(closingTgt) and xp >= closingTgt - syminfo.mintick * 2
+        reason = isTgt ? "target" : (not na(pendingReason) ? pendingReason : (prof > 0 ? "runnerTrail" : "stop"))
+        rM = (na(closingR) or closingR == 0) ? na : (xp - ep2) / closingR
+        if reason == "target"
+            cntTarget += 1
+            sumRTarget += nz(rM)
+        else if reason == "runnerTrail"
+            cntRunner += 1
+            sumRRunner += nz(rM)
+        else if reason == "trendBreak"
+            cntBreak += 1
+            sumRBreak += nz(rM)
+        else
+            cntStop += 1
+            sumRStop += nz(rM)
+        label.new(xb, xp, "EXIT", xloc = xloc.bar_index, style = label.style_label_down,
+             color = color.new(color.orange, 0), textcolor = color.black, size = size.small,
+             tooltip = "EXIT (" + reason + ") @ " + str.tostring(xp, format.mintick))
+    pendingReason := na
+    prevClosed := strategy.closedtrades
+
+if newOpened
+    oi  = strategy.opentrades - 1
+    obar = strategy.opentrades.entry_bar_index(oi)
+    opx  = strategy.opentrades.entry_price(oi)
+    label.new(obar, opx, "BUY", xloc = xloc.bar_index, style = label.style_label_up,
+         color = color.new(color.green, 0), textcolor = color.white, size = size.small,
+         tooltip = "BUY @ " + str.tostring(opx, format.mintick) + "  (" + str.tostring(posShares) + " sh)")
+
+// --- live stop/target lines (deleted when flat) ---
+liveTgt = inUseRunner ? firstTgtPx : targetPx
+liveStp = inUseRunner ? runnerStop : initStop
+var line stopLn = na
+var line tgtLn  = na
+if posOpen and inShowTp
+    line.delete(stopLn)
+    line.delete(tgtLn)
+    stopLn := line.new(entryBarIdx, liveStp, bar_index, liveStp, xloc = xloc.bar_index, color = color.new(color.red,   0), style = line.style_dashed, width = 1)
+    tgtLn  := line.new(entryBarIdx, liveTgt, bar_index, liveTgt, xloc = xloc.bar_index, color = color.new(color.green, 0), style = line.style_dashed, width = 1)
+else
+    line.delete(stopLn)
+    line.delete(tgtLn)
+    stopLn := na
+    tgtLn  := na
+
+// --- debug panels ---
+var table funT = na
+if inShowDebug and barstate.islast
+    if na(funT)
+        funT := table.new(position.middle_left, 2, 8, border_width = 1)
+    table.cell(funT, 0, 0, "FUNNEL", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 1, 0, "bars",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(funT, 0, 1, "ribbon up",  text_size = size.small)
+    table.cell(funT, 1, 1, str.tostring(fRibbon), text_size = size.small)
+    table.cell(funT, 0, 2, "tag",        text_size = size.small)
+    table.cell(funT, 1, 2, str.tostring(fTag), text_size = size.small)
+    table.cell(funT, 0, 3, "confirm",    text_size = size.small)
+    table.cell(funT, 1, 3, str.tostring(fConf), text_size = size.small)
+    table.cell(funT, 0, 4, "setup",      text_size = size.small)
+    table.cell(funT, 1, 4, str.tostring(fSetup), text_size = size.small)
+    table.cell(funT, 0, 5, "FULL trig",  bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 1, 5, str.tostring(fFull), bgcolor = color.new(color.orange, 35), text_size = size.small)
+    table.cell(funT, 0, 6, "skip noLvl", bgcolor = color.new(color.red, 60), text_size = size.small)
+    table.cell(funT, 1, 6, str.tostring(fSkipNoLvl), bgcolor = color.new(color.red, 60), text_size = size.small)
+    table.cell(funT, 0, 7, "skip <minR", bgcolor = color.new(color.red, 60), text_size = size.small)
+    table.cell(funT, 1, 7, str.tostring(fSkipMinRr), bgcolor = color.new(color.red, 60), text_size = size.small)
+
+var table exT = na
+if inShowDebug and barstate.islast
+    if na(exT)
+        exT := table.new(position.middle_right, 3, 5, border_width = 1)   // off the bottom so the tester pane doesn't hide it
+    table.cell(exT, 0, 0, "EXIT", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exT, 1, 0, "N",    bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exT, 2, 0, "avgR", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(exT, 0, 1, "target",     text_size = size.small)
+    table.cell(exT, 1, 1, str.tostring(cntTarget), text_size = size.small)
+    table.cell(exT, 2, 1, cntTarget > 0 ? str.tostring(sumRTarget / cntTarget, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 2, "runnerTrail",text_size = size.small)
+    table.cell(exT, 1, 2, str.tostring(cntRunner), text_size = size.small)
+    table.cell(exT, 2, 2, cntRunner > 0 ? str.tostring(sumRRunner / cntRunner, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 3, "stop",       text_size = size.small)
+    table.cell(exT, 1, 3, str.tostring(cntStop), text_size = size.small)
+    table.cell(exT, 2, 3, cntStop > 0 ? str.tostring(sumRStop / cntStop, "#.##") : "-", text_size = size.small)
+    table.cell(exT, 0, 4, "trendBreak", text_size = size.small)
+    table.cell(exT, 1, 4, str.tostring(cntBreak), text_size = size.small)
+    table.cell(exT, 2, 4, cntBreak > 0 ? str.tostring(sumRBreak / cntBreak, "#.##") : "-", text_size = size.small)
+
+var table mfeT = na
+if inShowDebug and barstate.islast
+    if na(mfeT)
+        mfeT := table.new(position.top_left, 3, 7, border_width = 1)   // top_left: clear of the Strategy-Tester pane (which hides bottom tables)
+    table.cell(mfeT, 0, 0, "MFE", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 1, 0, "N",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 2, 0, "%",   bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(mfeT, 0, 1, ">=1R", text_size = size.small)
+    table.cell(mfeT, 1, 1, str.tostring(mfeGe1), text_size = size.small)
+    table.cell(mfeT, 2, 1, mfeN > 0 ? str.tostring(100.0 * mfeGe1 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 2, ">=2R", text_size = size.small)
+    table.cell(mfeT, 1, 2, str.tostring(mfeGe2), text_size = size.small)
+    table.cell(mfeT, 2, 2, mfeN > 0 ? str.tostring(100.0 * mfeGe2 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 3, ">=3R", text_size = size.small)
+    table.cell(mfeT, 1, 3, str.tostring(mfeGe3), text_size = size.small)
+    table.cell(mfeT, 2, 3, mfeN > 0 ? str.tostring(100.0 * mfeGe3 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 4, ">=4R", text_size = size.small)
+    table.cell(mfeT, 1, 4, str.tostring(mfeGe4), text_size = size.small)
+    table.cell(mfeT, 2, 4, mfeN > 0 ? str.tostring(100.0 * mfeGe4 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 5, ">=5R", text_size = size.small)
+    table.cell(mfeT, 1, 5, str.tostring(mfeGe5), text_size = size.small)
+    table.cell(mfeT, 2, 5, mfeN > 0 ? str.tostring(100.0 * mfeGe5 / mfeN, "#.#") : "-", text_size = size.small)
+    table.cell(mfeT, 0, 6, "avgMAE", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 1, 6, mfeN > 0 ? str.tostring(mfeSumAdv / mfeN, "#.##") + "R" : "-", bgcolor = color.new(color.teal, 60), text_size = size.small)
+    table.cell(mfeT, 2, 6, "", bgcolor = color.new(color.teal, 60), text_size = size.small)
+
+// --- position-size / state panel ---
+var table pT = na
+if inShowDebug and barstate.islast
+    if na(pT)
+        pT := table.new(position.top_right, 2, 7, border_width = 1)
+    table.cell(pT, 0, 0, "SWING", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(pT, 1, 0, longEligible ? "UPTREND" : "no-trade", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(pT, 0, 1, "Risk %",    text_size = size.small)
+    table.cell(pT, 1, 1, str.tostring(inRiskPct) + "%  (" + str.tostring(math.round(candRiskCash)) + ")", text_size = size.small)
+    table.cell(pT, 0, 2, "R / share", text_size = size.small)
+    table.cell(pT, 1, 2, candR > 0 ? str.tostring(candR, format.mintick) : "-", text_size = size.small)
+    table.cell(pT, 0, 3, "Level R",   text_size = size.small)
+    table.cell(pT, 1, 3, not na(candLevelRr) ? str.tostring(candLevelRr, "#.##") + "R" : "-", text_size = size.small)
+    table.cell(pT, 0, 4, "In position", text_size = size.small)
+    table.cell(pT, 1, 4, posOpen ? str.tostring(posShares) + " sh @ " + str.tostring(math.round(entryPx)) : "flat", text_color = posOpen ? color.lime : color.gray, text_size = size.small)
+    table.cell(pT, 0, 5, "Stop / Tgt", text_size = size.small)
+    table.cell(pT, 1, 5, posOpen ? str.tostring(math.round(liveStp)) + " / " + str.tostring(math.round(liveTgt)) : "-", text_size = size.small)
+    pnl = posOpen ? math.round(close - entryPx) : 0
+    table.cell(pT, 0, 6, "Open P&L/sh", text_size = size.small)
+    table.cell(pT, 1, 6, posOpen ? str.tostring(pnl) + " pts" : "-", text_color = pnl >= 0 ? color.lime : color.red, text_size = size.small)
+
+// =============================================================================
+// === 8. ALERTS ===
+// =============================================================================
+exitFired = strategy.closedtrades > nz(strategy.closedtrades[1])
+alertcondition(doEnterLong, title = "BUY",  message = "BUY {{ticker}} @ {{close}}")
+alertcondition(exitFired,   title = "EXIT", message = "EXIT {{ticker}} @ {{close}}")
+if doEnterLong
+    alert(inAlertTag + " | BUY " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | " + str.tostring(posShares) + " sh", alert.freq_once_per_bar_close)
+if exitFired
+    alert(inAlertTag + " | EXIT " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
