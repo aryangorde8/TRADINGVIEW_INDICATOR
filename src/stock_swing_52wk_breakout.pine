@@ -1,0 +1,154 @@
+//@version=6
+// =============================================================================
+// STOCK SWING — 52-week-high breakout (daily, CASH EQUITY, long-only)
+// -----------------------------------------------------------------------------
+// PURPOSE  : Second CONTINUATION entry alongside the validated ribbon-pullback,
+//            per the converging in-house evidence (intraday mean-rev: no edge;
+//            RSI2 dip-buy: rejected) that this universe pays trend continuation.
+//            Ribbon-pullback buys WEAKNESS inside a trend; this buys FRESH
+//            STRENGTH: the breakout through the 52-week-high anchor.
+// EDGE     : anchoring bias (George & Hwang 2004): traders treat the 52-week
+//            high as a ceiling and underreact as price approaches it, so the
+//            move through it is followed by drift. Nearness to the 52-week high
+//            forecasts returns BETTER than plain past-return momentum; the
+//            effect is profitable in 18 of 20 international markets tested and
+//            documented in India (52-week-high effect, Indian evidence;
+//            momentum profitability shown on NSE data across several studies).
+// ENTRY    : close makes a new N-day closing high (N ~ 252 = 52 weeks) while
+//            the persistent regime filter (close > EMA200) is on. Fires only
+//            on the crossing bar — not while grinding along the highs.
+// EXIT     : the VALIDATED in-house exit framework, reused verbatim: ATR-based
+//            stop, fixed 2R target (fixed 2R beat both runner and level-based
+//            exits in prior in-house tests — do not resurrect those here).
+// SIZING   : risk-based: shares = floor(equity*risk% / stop-distance), capped
+//            at no-leverage (equity/price). Same convention as SwingRP.
+// COSTS    : delivery equity ~0.2%/side all-in (commission_value below).
+// VALIDATE : PRE-REGISTERED acceptance test (decided before any backtest):
+//            run on 10+ liquid NSE names; export trades; audit each with
+//            fallacy-auditor's profit tool. ACCEPT only if the majority of
+//            names show PF > 1 with no fragility warnings AND the aggregate
+//            PF >= 1.5 with bootstrap CI low > 1.0 and PF-without-top-3 > 1.0
+//            (1.5 aligns with the validated ribbon baseline; a breakout system
+//            with fixed 2R lives or dies on hit rate, not one moonshot).
+//            ALSO record what fraction of entries land within 3 bars of a
+//            ribbon-pullback entry on the same name — if most do, this adds
+//            correlation, not diversification, and deployment is declined even
+//            if profitable. Defaults are literature/structural values, NOT
+//            optimised. FAIL => REJECT as-is; no re-tuning on the same data.
+// NON-REPAINT: daily bars, all logic on confirmed-bar close; no
+//            request.security; orders fill at bar close (process_orders_on_close).
+// =============================================================================
+strategy(
+     title                   = "Stock Swing — 52wk-High Breakout (daily, long-only)",
+     shorttitle              = "Swing52W",
+     overlay                 = true,
+     pyramiding              = 0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,
+     initial_capital         = 1000000,                       // INR 10 lakh
+     default_qty_type        = strategy.fixed,                // qty computed per-trade (risk-based)
+     default_qty_value       = 1,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.2,                           // ~0.2%/side delivery all-in; tune per broker
+     slippage                = 5,
+     currency                = currency.INR,
+     max_labels_count        = 500)
+
+// =============================================================================
+// === 1. INPUTS ===
+// Edge params (<=8 budget; the ones one might curve-fit): breakoutLen,
+// stopAtrMult, rrTarget (3). EMA/ATR lengths and riskPct are STRUCTURAL
+// CONFIG — not to be optimised.
+// =============================================================================
+GRP_REGIME = "Regime (trend filter)"
+GRP_ENTRY  = "Entry (52wk-high breakout)"
+GRP_EXIT   = "Risk / target"
+GRP_SIZE   = "Position sizing"
+GRP_SHOW   = "Display"
+
+inEmaTrendLen = input.int(200, "Trend EMA length", minval = 50, group = GRP_REGIME,
+     tooltip = "config — persistent uptrend FILTER: close must be above this EMA. Not the trigger.")
+inBreakoutLen = input.int(252, "Breakout lookback (bars)", minval = 60, group = GRP_ENTRY,
+     tooltip = "EDGE PARAM — 252 daily bars ~ 52 weeks, the anchor the literature documents. Entry fires when close exceeds the highest CLOSE of the prior N bars.")
+inStopAtrMult = input.float(2.5, "Stop distance (x ATR14)", minval = 0.5, step = 0.5, group = GRP_EXIT,
+     tooltip = "EDGE PARAM — initial stop below entry. Same role and default family as the validated SwingRP framework.")
+inRrTarget    = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = GRP_EXIT,
+     tooltip = "EDGE PARAM — fixed-R profit target. 2R is the VALIDATED in-house exit; runner and level-based exits were tested and rejected.")
+inRiskPct     = input.float(1.0, "Risk % of equity per trade", minval = 0.1, step = 0.1, group = GRP_SIZE,
+     tooltip = "config — position sized so a stop-out loses ~this % of equity, capped at no-leverage.")
+inShowPlots   = input.bool(true, "Show anchor/EMA plots", group = GRP_SHOW)
+inShowLabels  = input.bool(true, "Show BUY labels (entry/SL/target)", group = GRP_SHOW)
+inShowRegime  = input.bool(true, "Show regime table + background tint", group = GRP_SHOW)
+
+// =============================================================================
+// === 2. REGIME / SIGNALS (confirmed-bar values only) ===
+// =============================================================================
+emaTrend   = ta.ema(close, inEmaTrendLen)
+atr14      = ta.atr(14)
+anchorHigh = ta.highest(close[1], inBreakoutLen)   // highest PRIOR close: today can break it
+
+regimeBull  = close > emaTrend
+breakout    = regimeBull and close > anchorHigh and strategy.position_size == 0
+
+// =============================================================================
+// === 3. SIZING (risk-based, no leverage) ===
+// =============================================================================
+stopDist   = inStopAtrMult * atr14
+riskShares = stopDist > 0 ? math.floor(strategy.equity * inRiskPct / 100 / stopDist) : 0
+capShares  = close > 0 ? math.floor(strategy.equity / close) : 0
+qty        = math.max(math.min(riskShares, capShares), 0)
+
+// =============================================================================
+// === 4. ORDERS (fill at this bar's confirmed close) ===
+// =============================================================================
+var float stopLevel   = na
+var float targetLevel = na
+
+if breakout and qty > 0
+    stopLevel   := close - stopDist
+    targetLevel := close + inRrTarget * stopDist
+    strategy.entry("L", strategy.long, qty = qty)
+    if inShowLabels
+        label.new(bar_index, na,
+             text = "BUY " + str.tostring(close, format.mintick)
+                  + "\nSL " + str.tostring(stopLevel, format.mintick)
+                  + "\nTGT " + str.tostring(targetLevel, format.mintick),
+             yloc = yloc.belowbar, style = label.style_label_up,
+             color = color.new(color.green, 15), textcolor = color.white,
+             size = size.small)
+
+if strategy.position_size > 0
+    strategy.exit("XT", from_entry = "L", stop = stopLevel, limit = targetLevel)
+
+// Reset only when flat AND not on the entry-signal bar: with
+// process_orders_on_close the fill happens after this bar's calc, so
+// position_size is still 0 on the signal bar — resetting here would wipe
+// the levels the entry block just set and the exit would arm with na
+// (the never-exits bug caught in live testing on 2026-07-04).
+if strategy.position_size == 0 and not breakout
+    stopLevel   := na
+    targetLevel := na
+
+// =============================================================================
+// === 5. DISPLAY ===
+// =============================================================================
+plot(inShowPlots ? anchorHigh : na, "52wk-high anchor", color = color.new(color.purple, 30))
+plot(inShowPlots ? emaTrend : na, "EMA trend", color = color.new(color.teal, 0), linewidth = 2)
+plot(strategy.position_size > 0 ? stopLevel : na, "Stop", color = color.new(color.red, 30), style = plot.style_linebr)
+plot(strategy.position_size > 0 ? targetLevel : na, "Target", color = color.new(color.green, 30), style = plot.style_linebr)
+
+// Regime at a glance: green tint = bullish (close > trend EMA), red = bearish.
+// Exits are drawn by TradingView's own trade arrows; SL/TGT lines above.
+bgcolor(inShowRegime ? (regimeBull ? color.new(color.teal, 94) : color.new(color.red, 94)) : na, title = "Regime tint")
+
+var table regimeTable = table.new(position.top_right, 1, 3)
+if inShowRegime and barstate.islast
+    distPct = (anchorHigh - close) / close * 100
+    table.cell(regimeTable, 0, 0, regimeBull ? "REGIME: BULLISH" : "REGIME: BEARISH (no entries)",
+         bgcolor = regimeBull ? color.new(color.green, 15) : color.new(color.red, 15),
+         text_color = color.white, text_size = size.small)
+    table.cell(regimeTable, 0, 1, close > anchorHigh ? "AT/ABOVE 52W HIGH" : str.tostring(distPct, "#.#") + "% below 52w high",
+         bgcolor = color.new(color.gray, 30), text_color = color.white, text_size = size.small)
+    table.cell(regimeTable, 0, 2, strategy.position_size > 0 ? "IN POSITION" : "FLAT — waiting for breakout",
+         bgcolor = strategy.position_size > 0 ? color.new(color.blue, 30) : color.new(color.gray, 50),
+         text_color = color.white, text_size = size.small)

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fallacy-auditor"
+version = "0.4.0"
+description = "Strictly grounded auditor that flags five reasoning fallacies in trading text — free by default via local Ollama models"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Aryan Gorde" }]
+# Core stays free and lean: pydantic for validation, stdlib for HTTP to a
+# local Ollama server. The paid Claude engines are an optional extra.
+dependencies = [
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# The live eval needs a running LLM backend and (default engine: local
+# Ollama) some minutes of CPU, so it is opt-in: plain `pytest` runs only the
+# deterministic unit tests; `pytest -m eval -s` runs the precision/recall
+# harness (last -m wins).
+addopts = "-m 'not eval'"
+markers = [
+    "eval: live LLM evaluation against data/labeled_examples.jsonl (needs an LLM backend)",
+]

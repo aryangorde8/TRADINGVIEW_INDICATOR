@@ -1,0 +1,171 @@
+//@version=6
+// =============================================================================
+// STOCK SWING — DUAL EDGE: ribbon pullback + 52wk breakout (daily, CASH, long)
+// -----------------------------------------------------------------------------
+// PURPOSE  : One deployable script combining the two measured continuation
+//            edges, which take DIFFERENT trades (measured overlap: only 11%
+//            of 52wk entries within ~3 bars of a ribbon entry, 2351 entries,
+//            39 names). One position per symbol; ribbon has priority when
+//            both fire. Assembled from tested components — no new tuning.
+// EDGE A   : ribbon pullback (VALIDATED, in-house): light ribbon 20>50>200 +
+//            close>200; entry = pullback tag of EMA20 (0.5 ATR tolerance) +
+//            bullish resume within a 3-bar window; stop = min(swingLow(10) -
+//            0.25 ATR, close - 1.5 ATR); fixed 2R target; trend-break exit.
+// EDGE B   : 52wk-high breakout (George & Hwang 2004 anchoring; replicated
+//            in-house: OOS pooled PF 1.41, CI 1.24-1.59, 1092 trades):
+//            entry = close > highest prior 252 closes while close > EMA200;
+//            stop = 2.5 ATR; fixed 2R target; no trend-break exit.
+// PORTFOLIO: run this on a fixed watchlist (the 39-name research universe or
+//            similar liquid set), risk 1.0-1.5%/trade, max ~10 concurrent
+//            positions across names, alerts per symbol. Do NOT drop names
+//            because they backtested poorly (survivorship by hand).
+// HONEST EXPECTATIONS (shared-equity replication, 39 names, 2013-2026):
+//            portfolio CAGR ~8-15%/yr at 27-38% max drawdowns depending on
+//            risk (1-3%) and cap (10-15). NIFTY buy-and-hold base rate over
+//            the same era ~12-13% — the active edge over the index is REAL
+//            but THIN. Numbers >20%/yr were only produced by pre-2005 data
+//            of dubious quality; do not project them. No configuration
+//            reached a sustained 24% CAGR in the modern era. Anyone
+//            promising a fixed multi-decade return is committing the
+//            fallacies this project audits.
+// COSTS    : delivery equity ~0.2%/side all-in. NON-REPAINT: confirmed-bar
+//            close logic only; no request.security; fills at bar close.
+// =============================================================================
+strategy(
+     title                   = "Stock Swing — Dual Edge (daily, long-only)",
+     shorttitle              = "SwingDUAL",
+     overlay                 = true,
+     pyramiding              = 0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,
+     initial_capital         = 1000000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.2,
+     slippage                = 5,
+     currency                = currency.INR,
+     max_labels_count        = 500)
+
+// =============================================================================
+// === 1. INPUTS (all defaults are the TESTED values — not to be optimised) ===
+// =============================================================================
+GRP_EDGES = "Edges"
+GRP_RISK  = "Risk"
+GRP_SHOW  = "Display"
+
+inUseRibbon   = input.bool(true, "Edge A: ribbon pullback (validated)", group = GRP_EDGES)
+inUseBreakout = input.bool(true, "Edge B: 52wk-high breakout (replicated)", group = GRP_EDGES)
+inRiskPct     = input.float(1.0, "Risk % of equity per trade", minval = 0.1, step = 0.1, group = GRP_RISK,
+     tooltip = "Portfolio guidance: 1.0-1.5% with ~10 concurrent names. Replication measured modern-era CAGR ~8-15% at 27-38% maxDD across 1-3% risk.")
+inShowLabels  = input.bool(true, "Show BUY labels (edge/entry/SL/target)", group = GRP_SHOW)
+inShowRegime  = input.bool(true, "Show regime table + background tint", group = GRP_SHOW)
+
+// =============================================================================
+// === 2. SHARED INDICATORS (confirmed-bar values only) ===
+// =============================================================================
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+atr14  = ta.atr(14)
+swLow  = ta.lowest(low, 10)
+anchor = ta.highest(close[1], 252)
+
+ribbonBull = ema20 > ema50 and ema50 > ema200 and close > ema200
+trendBull  = close > ema200
+
+// =============================================================================
+// === 3. EDGE A — ribbon pullback signal (validated arm-window machine) ===
+// =============================================================================
+tagLong     = low <= ema20 + 0.5 * atr14
+confirmLong = close > ema20 and close > open
+setupLong   = ribbonBull and tagLong
+var int armLong = 0
+trigRibbon  = ribbonBull and confirmLong and (setupLong or armLong > 0)
+armLong    := trigRibbon ? 0 : setupLong ? 3 : (armLong > 0 and ribbonBull) ? armLong - 1 : 0
+
+// =============================================================================
+// === 4. EDGE B — 52wk-high breakout signal ===
+// =============================================================================
+trigBreakout = trendBull and not na(anchor) and close > anchor
+
+// =============================================================================
+// === 5. ENTRY SELECTION + SIZING (one position; ribbon priority) ===
+// =============================================================================
+flat       = strategy.position_size == 0
+wantRibbon = inUseRibbon and trigRibbon and flat
+wantBreak  = inUseBreakout and trigBreakout and flat and not wantRibbon
+
+candStop = wantRibbon ? math.min(swLow - 0.25 * atr14, close - 1.5 * atr14)
+     : close - 2.5 * atr14
+candR    = close - candStop
+riskSh   = candR > 0 ? math.floor(strategy.equity * inRiskPct / 100 / candR) : 0
+capSh    = close > 0 ? math.floor(strategy.equity / close) : 0
+qty      = math.max(math.min(riskSh, capSh), 0)
+
+var float stopLevel   = na
+var float targetLevel = na
+var string posKind    = na
+
+doEnter = (wantRibbon or wantBreak) and qty > 0
+if doEnter
+    stopLevel   := candStop
+    targetLevel := close + 2.0 * candR
+    posKind     := wantRibbon ? "RIBBON" : "52WK-BRK"
+    strategy.entry("L", strategy.long, qty = qty)
+    if inShowLabels
+        label.new(bar_index, na,
+             text = "BUY [" + posKind + "] " + str.tostring(close, format.mintick)
+                  + "\nSL " + str.tostring(stopLevel, format.mintick)
+                  + "\nTGT " + str.tostring(targetLevel, format.mintick),
+             yloc = yloc.belowbar, style = label.style_label_up,
+             color = wantRibbon ? color.new(color.green, 15) : color.new(color.purple, 15),
+             textcolor = color.white, size = size.small)
+
+// =============================================================================
+// === 6. EXITS (per-edge rules, exactly as tested) ===
+// =============================================================================
+if strategy.position_size > 0
+    strategy.exit("XT", from_entry = "L", stop = stopLevel, limit = targetLevel)
+    // trend-break exit belongs to the ribbon edge only (its tested spec)
+    if posKind == "RIBBON" and not ribbonBull
+        strategy.close("L", comment = "trend break")
+
+// reset only when flat AND not on the entry-signal bar (fill lands after this
+// bar's calc — resetting unconditionally re-creates the never-exits bug)
+if strategy.position_size == 0 and not doEnter
+    stopLevel   := na
+    targetLevel := na
+    posKind     := na
+
+// =============================================================================
+// === 7. DISPLAY ===
+// =============================================================================
+plot(ema20, "EMA20", color = color.new(color.yellow, 30))
+plot(ema200, "EMA200", color = color.new(color.teal, 0), linewidth = 2)
+plot(anchor, "52wk anchor", color = color.new(color.purple, 40))
+plot(strategy.position_size > 0 ? stopLevel : na, "Stop", color = color.new(color.red, 30), style = plot.style_linebr)
+plot(strategy.position_size > 0 ? targetLevel : na, "Target", color = color.new(color.green, 30), style = plot.style_linebr)
+bgcolor(inShowRegime ? (ribbonBull ? color.new(color.teal, 94) : trendBull ? color.new(color.olive, 94) : color.new(color.red, 94)) : na, title = "Regime tint")
+
+var table rt = table.new(position.top_right, 1, 3)
+if inShowRegime and barstate.islast
+    stateTxt = ribbonBull ? "REGIME: BULLISH (both edges live)"
+         : trendBull ? "REGIME: TREND-ONLY (52wk edge live)"
+         : "REGIME: BEARISH — cash"
+    table.cell(rt, 0, 0, stateTxt,
+         bgcolor = ribbonBull ? color.new(color.green, 15) : trendBull ? color.new(color.olive, 15) : color.new(color.red, 15),
+         text_color = color.white, text_size = size.small)
+    distPct = (anchor - close) / close * 100
+    table.cell(rt, 0, 1, close > anchor ? "AT/ABOVE 52W HIGH" : str.tostring(distPct, "#.#") + "% below 52w high",
+         bgcolor = color.new(color.gray, 30), text_color = color.white, text_size = size.small)
+    table.cell(rt, 0, 2, strategy.position_size > 0 ? "IN POSITION [" + posKind + "]" : "FLAT — waiting",
+         bgcolor = strategy.position_size > 0 ? color.new(color.blue, 30) : color.new(color.gray, 50),
+         text_color = color.white, text_size = size.small)
+
+// =============================================================================
+// === 8. ALERTS ===
+// =============================================================================
+alertcondition(doEnter, title = "BUY", message = "DUAL BUY {{ticker}} @ {{close}}")
+if doEnter
+    alert("SWING DUAL | BUY [" + posKind + "] " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)

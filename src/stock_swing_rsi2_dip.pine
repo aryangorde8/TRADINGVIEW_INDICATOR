@@ -1,0 +1,144 @@
+//@version=6
+// =============================================================================
+// STOCK SWING — RSI(2) dip-buy in uptrend (daily, CASH EQUITY, long-only)
+// -----------------------------------------------------------------------------
+// PURPOSE  : Complement the validated ribbon-pullback (momentum continuation)
+//            with the opposite entry style on the SAME regime discipline:
+//            short-term MEAN REVERSION. Buy 2-day oversold extremes in liquid
+//            NSE stocks that are in a persistent uptrend; exit on the snap-back.
+//            Cash/delivery equity — no options, no leverage, no overnight risk
+//            beyond the shares held.
+// EDGE     : stocks above their long-term average that sell off hard over 1-3
+//            days tend to snap back (short-term overreaction / liquidity
+//            provision). This is the most-replicated daily mean-reversion
+//            effect in equities (RSI-2 family). Regime filter = close > EMA200
+//            (persistent FILTER, not the trigger). Entry = RSI(2) < threshold.
+//            Exit = strength returned (close > SMA5), disaster stop, time stop.
+// SIZING   : risk-based: shares = floor(equity*risk% / stop-distance), capped
+//            at no-leverage (equity/price). Same convention as SwingRP.
+// COSTS    : delivery equity ~0.2%/side all-in (commission_value below).
+//            NOTE: mean reversion trades more often than pullback-trend —
+//            costs matter MORE here; never judge results with costs off.
+// VALIDATE : PRE-REGISTERED acceptance test (decided before any backtest):
+//            run on 10+ liquid NSE names; export trades; audit each with
+//            fallacy-auditor's profit-factor tool. ACCEPT only if the
+//            majority of names show PF > 1 with no fragility warnings and
+//            the aggregate PF >= 2 with bootstrap CI low > 1.0 and
+//            PF-without-top-3 > 1.0. Defaults below are literature values,
+//            NOT optimised; if the test fails, the strategy is REJECTED —
+//            re-tuning on the same data would be curve-fitting.
+// NON-REPAINT: daily bars, all logic on confirmed-bar close; no
+//            request.security; orders fill at bar close (process_orders_on_close).
+// OUTCOME  : TESTED 2026-07-04 — REJECTED. Backtests underperformed the
+//            validated ribbon-pullback and missed the pre-registered bar
+//            (aggregate PF >= 2). Per the no-retuning rule above, this file
+//            is CLOSED as-is: do NOT lower the RSI threshold, widen the stop,
+//            or lengthen the exit SMA and re-test — that is the curve-fitting
+//            loop this header forbids. Kept as a research artifact. Read with
+//            the earlier intraday mean-reversion failure (nifty_5m_pure_meanrev),
+//            the converging evidence is that this universe rewards trend
+//            CONTINUATION, not short-term dip-buying, after realistic costs.
+// AMENDMENT (2026-07-04, after the never-exits bug was found in the 52wk
+//            file): that rejection test ran with the SAME level-reset bug —
+//            the 3-ATR disaster stop was never armed (strength/time exits
+//            still worked, so trades did close). The tested variant was
+//            therefore not exactly the registered spec. ONE clean re-test of
+//            the registered spec (this fixed file, defaults unchanged) is
+//            legitimate — that is testing what was pre-registered, not
+//            tuning. If it fails again, the rejection is final.
+// =============================================================================
+strategy(
+     title                   = "Stock Swing — RSI2 Dip Buy (daily, long-only)",
+     shorttitle              = "SwingRSI2",
+     overlay                 = true,
+     pyramiding              = 0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,
+     initial_capital         = 1000000,                       // INR 10 lakh
+     default_qty_type        = strategy.fixed,                // qty computed per-trade (risk-based)
+     default_qty_value       = 1,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.2,                           // ~0.2%/side delivery all-in; tune per broker
+     slippage                = 5,
+     currency                = currency.INR,
+     max_labels_count        = 500)
+
+// =============================================================================
+// === 1. INPUTS ===
+// Edge params (<=8 budget; the ones one might curve-fit): rsiBuyThresh,
+// stopAtrMult, timeStopBars (3). RSI/EMA/SMA/ATR LENGTHS and riskPct are
+// STRUCTURAL CONFIG — literature-standard, not to be optimised.
+// =============================================================================
+GRP_REGIME = "Regime (trend filter)"
+GRP_ENTRY  = "Entry (oversold dip)"
+GRP_EXIT   = "Exit"
+GRP_SIZE   = "Position sizing"
+GRP_SHOW   = "Display"
+
+inEmaTrendLen = input.int(200, "Trend EMA length", minval = 50, group = GRP_REGIME,
+     tooltip = "config — persistent uptrend FILTER: close must be above this EMA. Not the trigger.")
+inRsiLen      = input.int(2, "RSI length", minval = 2, maxval = 5, group = GRP_ENTRY,
+     tooltip = "config — 2 is the canonical short-term overreaction lookback.")
+inRsiThresh   = input.float(10.0, "RSI buy threshold", minval = 1, maxval = 30, step = 1, group = GRP_ENTRY,
+     tooltip = "EDGE PARAM — buy when RSI(2) closes below this while regime is bullish. Literature default 10; lower = rarer/deeper dips.")
+inExitMaLen   = input.int(5, "Exit SMA length", minval = 2, group = GRP_EXIT,
+     tooltip = "config — exit on strength: close back above this short SMA means the snap-back happened.")
+inStopAtrMult = input.float(3.0, "Disaster stop (x ATR14)", minval = 1, step = 0.5, group = GRP_EXIT,
+     tooltip = "EDGE PARAM — wide stop; it is disaster protection, not the exit. Mean reversion needs room or the edge is stopped out of existence.")
+inTimeStop    = input.int(10, "Time stop (bars)", minval = 2, group = GRP_EXIT,
+     tooltip = "EDGE PARAM — if neither strength-exit nor stop hit within N bars, the overreaction thesis has expired; exit.")
+inRiskPct     = input.float(1.0, "Risk % of equity per trade", minval = 0.1, step = 0.1, group = GRP_SIZE,
+     tooltip = "config — position sized so a stop-out loses ~this % of equity, capped at no-leverage.")
+inShowPlots   = input.bool(true, "Show EMA/SMA plots", group = GRP_SHOW)
+
+// =============================================================================
+// === 2. REGIME / SIGNALS (confirmed-bar values only) ===
+// =============================================================================
+emaTrend = ta.ema(close, inEmaTrendLen)
+smaExit  = ta.sma(close, inExitMaLen)
+rsiFast  = ta.rsi(close, inRsiLen)
+atr14    = ta.atr(14)
+
+regimeBull = close > emaTrend
+dipSignal  = regimeBull and rsiFast < inRsiThresh and strategy.position_size == 0
+exitStrong = strategy.position_size > 0 and close > smaExit
+
+// =============================================================================
+// === 3. SIZING (risk-based, no leverage) ===
+// =============================================================================
+stopDist   = inStopAtrMult * atr14
+riskShares = stopDist > 0 ? math.floor(strategy.equity * inRiskPct / 100 / stopDist) : 0
+capShares  = close > 0 ? math.floor(strategy.equity / close) : 0
+qty        = math.max(math.min(riskShares, capShares), 0)
+
+// =============================================================================
+// === 4. ORDERS (fill at this bar's confirmed close) ===
+// =============================================================================
+var float stopLevel = na
+
+if dipSignal and qty > 0
+    stopLevel := close - stopDist
+    strategy.entry("L", strategy.long, qty = qty)
+
+if strategy.position_size > 0
+    strategy.exit("SL", from_entry = "L", stop = stopLevel)
+    barsHeld = bar_index - strategy.opentrades.entry_bar_index(0)
+    if exitStrong
+        strategy.close("L", comment = "strength")
+    else if barsHeld >= inTimeStop
+        strategy.close("L", comment = "time")
+
+// Reset only when flat AND not on the entry-signal bar: the fill happens
+// after this bar's calc (process_orders_on_close), so resetting whenever
+// position_size == 0 wipes the level the entry block just set and the
+// disaster stop arms with na. Same bug family as the 52wk file.
+if strategy.position_size == 0 and not dipSignal
+    stopLevel := na
+
+// =============================================================================
+// === 5. DISPLAY ===
+// =============================================================================
+plot(inShowPlots ? emaTrend : na, "EMA trend", color = color.new(color.teal, 0), linewidth = 2)
+plot(inShowPlots ? smaExit : na, "SMA exit", color = color.new(color.orange, 40))
+plot(strategy.position_size > 0 ? stopLevel : na, "Stop", color = color.new(color.red, 30), style = plot.style_linebr)
+bgcolor(regimeBull ? na : color.new(color.gray, 92), title = "Regime off")

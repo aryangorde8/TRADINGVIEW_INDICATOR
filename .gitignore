@@ -1,3 +1,10 @@
 files.zip
 .localgit/
 git_*.deb
+
+# python/tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+data_cache/
+*.egg-info/
