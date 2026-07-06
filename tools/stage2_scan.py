@@ -121,6 +121,24 @@ def main() -> int:
         for line in groups[title]:
             print("  " + line)
     print(f"\n(skipped {skipped}: no data / illiquid / delisted)")
+
+    # Breadth thermometer: % of scanned names in Stage-2 is a free market
+    # regime gauge. Appends one row per run; plot or eyeball the trend.
+    scanned = len(names) - skipped
+    if scanned > 0:
+        breadth = 100.0 * (len(groups["IN STAGE-2"]) + len(groups["NEW BREAKOUT"])) / scanned
+        log = Path(__file__).parent / "breadth_log.csv"
+        new_file = not log.exists()
+        with log.open("a") as f:
+            if new_file:
+                f.write("date,scanned,new_breakouts,in_stage2,exits,breadth_pct\n")
+            f.write(
+                f"{pd.Timestamp.now():%Y-%m-%d},{scanned},"
+                f"{len(groups['NEW BREAKOUT'])},{len(groups['IN STAGE-2'])},"
+                f"{len(groups['EXIT'])},{breadth:.1f}\n"
+            )
+        print(f"breadth: {breadth:.1f}% of scanned names in Stage-2 "
+              f"(logged to {log.name})")
     return 0
 
 

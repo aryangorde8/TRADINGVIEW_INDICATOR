@@ -46,13 +46,23 @@ three groups:
 | `EXIT` | Weekly close fell below the 30-week SMA this week | If you hold it: sell Monday. No debate. |
 | `IN STAGE-2` | Trend intact, already riding | Hold if owned; do nothing otherwise |
 
-Custom universe (e.g. paste Nifty 500 symbols, one per line, no `.NS`):
+**The wide net (recommended): scan the full Nifty 500.** Refresh the
+constituent list monthly, then scan it (takes ~10-15 min):
 
 ```bash
-python3 tools/stage2_scan.py --watchlist mylist.txt
+python3 tools/fetch_nifty500.py                                   # monthly
+python3 tools/stage2_scan.py --watchlist tools/watchlist_nifty500.txt
 ```
 
+Monsters are born mid-cap — the width of this net is the single biggest
+determinant of whether you're aboard the next ADANIGREEN. Any custom list
+also works (`--watchlist mylist.txt`, one NSE symbol per line, no `.NS`).
 Built-in liquidity gate: names trading under ~5 cr/day turnover are skipped.
+
+Every scan also appends one row to `tools/breadth_log.csv` — the **breadth
+thermometer** (% of scanned names in Stage-2). Rising breadth = recovery
+confirming, deploy with confidence; collapsing breadth = expect exits and
+hold cash without anxiety. It is your market-regime gauge, free.
 
 ### 1b. Verify a breakout on TradingView
 
@@ -64,10 +74,35 @@ exit for as long as you hold.
 ### 1c. Position rules (from the tested portfolio simulation)
 
 - Equal slots: ~10% of trading capital per name, max ~10 names.
+- Sector cap: max ~3 positions from one sector/theme (a single reversing
+  theme must never hit a third of the book).
 - More breakouts than free slots? Prefer names that also pass the value
   screen (section 3).
 - Never skip a signal because the last one lost; never hold below the
   30-week SMA; never drop a name from the watchlist for performing badly.
+
+### 1d. Where strategy cash lives (and where it never goes)
+
+Idle strategy cash sits in an **overnight/liquid fund or liquid ETF**
+(~6-6.5%, redeemable T+1) — that alone adds ~1.5-2.5%/yr vs idle cash.
+It does **NOT** go into higher-yield credit platforms (NBFC bonds / SDIs /
+"9-12% fixed" apps): those returns are credit-risk premium, not guarantees;
+the instruments lock up for 1-3 years; and credit stress clusters in the
+same downturns that produce the recovery breakouts the cash exists to buy.
+Never park deployable capital in something you can't sell on Monday.
+
+### 1e. After every closed trade — the journal (monthly scorecard)
+
+```bash
+python3 tools/journal.py add SYMBOL 2026-07-14 1425.50 2026-11-20 1710.00 70
+python3 tools/journal.py audit          # monthly: live PF + fragility check
+python3 tools/journal.py list
+```
+
+Costs are applied automatically (same 0.25%/side as the replications).
+Benchmark: replication pooled PF 2.0 (recent era) to 3.8. Live PF far below
+that across 20+ trades = stop and investigate before sizing up — the cause
+is usually rule-breaking, occasionally edge decay; both matter.
 
 ---
 

@@ -8,3 +8,5 @@ __pycache__/
 .pytest_cache/
 data_cache/
 *.egg-info/
+tools/journal.csv
+tools/breadth_log.csv
