@@ -75,6 +75,10 @@ def classify(name: str) -> tuple[str, str] | None:
     if turnover_cr < MIN_TURNOVER_CR:
         return None
     w = d["Close"].resample("W-FRI").last().dropna()
+    # Judge COMPLETED weeks only: W-FRI labels each week by its Friday, so a
+    # label in the future means the bar is still forming (e.g. a Monday run).
+    # Signals on a partial week can un-fire by Friday — that's repainting.
+    w = w[w.index <= pd.Timestamp.now()]
     if len(w) < 60:
         return None
     sma = w.rolling(30).mean()
