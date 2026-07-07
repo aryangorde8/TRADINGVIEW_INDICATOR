@@ -59,6 +59,29 @@ determinant of whether you're aboard the next ADANIGREEN. Any custom list
 also works (`--watchlist mylist.txt`, one NSE symbol per line, no `.NS`).
 Built-in liquidity gate: names trading under ~5 cr/day turnover are skipped.
 
+Other index lists: `python3 tools/fetch_nifty500.py --index next50`
+(also `midcap150`, `smallcap250`) — note the Nifty Next 50 names are
+already inside the Nifty 500 net, so the 500 scan covers them.
+
+**International markets:** the same scanner works on any Yahoo-covered
+exchange via a suffix — e.g. US stocks:
+
+```bash
+python3 tools/stage2_scan.py --watchlist us_list.txt --suffix "" --min-turnover 5
+```
+
+(`--min-turnover` is in units of 1e7 local currency: 5 = 5cr INR on NSE or
+~$50M/day on US names.) The Stage-2 edge replicated on US large caps too —
+see the measured numbers in the repo history. Actually investing abroad
+from India (LRS route, TCS above ₹10L/yr, currency risk, higher costs) is
+an optimisation for LATER capital sizes; India-first remains the plan.
+
+**Never, at any account size: futures & options.** SEBI's own studies show
+~9 of 10 retail F&O traders lose money. Structurally incompatible with this
+system anyway: median winning holds run ~9 months against monthly expiries
+and theta decay, and leverage converts the strategy's NORMAL 25-35%
+drawdowns into account destruction. The edge lives in cash equity.
+
 Every scan also appends one row to `tools/breadth_log.csv` — the **breadth
 thermometer** (% of scanned names in Stage-2). Rising breadth = recovery
 confirming, deploy with confidence; collapsing breadth = expect exits and

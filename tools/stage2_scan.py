@@ -55,12 +55,13 @@ TATATECH OFSS NAUKRI DATAPATTNS ZENTEC IREDA
 """.split()
 
 MIN_TURNOVER_CR = 5.0
+SUFFIX = ".NS"  # override with --suffix "" for US, ".L" for London, etc.
 
 
 def classify(name: str) -> tuple[str, str] | None:
     for attempt in range(2):
         try:
-            d = yf.download(f"{name}.NS", period="2y", interval="1d",
+            d = yf.download(f"{name}{SUFFIX}", period="2y", interval="1d",
                             auto_adjust=True, progress=False,
                             multi_level_index=False)
             break
@@ -71,6 +72,8 @@ def classify(name: str) -> tuple[str, str] | None:
     if d is None or d.empty or len(d) < 300:
         return None
     d = d.dropna(subset=["Close"])
+    # "cr" = units of 1e7 in the instrument's own currency (5 = 5cr INR on
+    # NSE, or 50M USD on US tickers — a comparable liquidity bar).
     turnover_cr = (d["Close"] * d["Volume"]).tail(63).mean() / 1e7
     if turnover_cr < MIN_TURNOVER_CR:
         return None
@@ -100,8 +103,17 @@ def classify(name: str) -> tuple[str, str] | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Weekly Stage-2 scanner")
     ap.add_argument("--watchlist", type=Path, default=None,
-                    help="text file, one NSE symbol per line (no .NS suffix)")
+                    help="text file, one symbol per line (no exchange suffix)")
+    ap.add_argument("--suffix", default=".NS",
+                    help='Yahoo exchange suffix: ".NS" NSE (default), '
+                         '"" for US tickers, ".L" London, ...')
+    ap.add_argument("--min-turnover", type=float, default=5.0,
+                    help="liquidity gate in units of 1e7 of local currency "
+                         "(default 5 = 5cr INR / ~50M USD)")
     args = ap.parse_args()
+    global SUFFIX, MIN_TURNOVER_CR
+    SUFFIX = args.suffix
+    MIN_TURNOVER_CR = args.min_turnover
 
     names = (
         [ln.strip().upper() for ln in args.watchlist.read_text().splitlines()

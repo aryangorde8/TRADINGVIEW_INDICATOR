@@ -17,17 +17,30 @@ import sys
 import urllib.request
 from pathlib import Path
 
-SOURCES = [
-    "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
-    "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
-]
-OUT = Path(__file__).parent / "watchlist_nifty500.txt"
+INDICES = {
+    "500": "ind_nifty500list.csv",
+    "next50": "ind_niftynext50list.csv",
+    "midcap150": "ind_niftymidcap150list.csv",
+    "smallcap250": "ind_niftysmallcap250list.csv",
+}
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 
 
 def main() -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Fetch NSE index constituents")
+    ap.add_argument("--index", choices=sorted(INDICES), default="500")
+    args = ap.parse_args()
+    csv_name = INDICES[args.index]
+    sources = [
+        f"https://archives.nseindia.com/content/indices/{csv_name}",
+        f"https://www.niftyindices.com/IndexConstituent/{csv_name}",
+    ]
+    out = Path(__file__).parent / f"watchlist_nifty{args.index}.txt"
+
     text = None
-    for url in SOURCES:
+    for url in sources:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=20) as resp:
@@ -45,13 +58,15 @@ def main() -> int:
         sym = (row.get("Symbol") or "").strip().upper()
         if sym and row.get("Series", "EQ").strip() == "EQ":
             symbols.append(sym)
-    if len(symbols) < 400:
+    min_expected = {"500": 400, "next50": 45, "midcap150": 130,
+                    "smallcap250": 220}[args.index]
+    if len(symbols) < min_expected:
         print(f"only {len(symbols)} symbols parsed — source format may have "
               "changed; not overwriting", file=sys.stderr)
         return 1
 
-    OUT.write_text("\n".join(symbols) + "\n")
-    print(f"wrote {len(symbols)} symbols -> {OUT}")
+    out.write_text("\n".join(symbols) + "\n")
+    print(f"wrote {len(symbols)} symbols -> {out}")
     return 0
 
 
