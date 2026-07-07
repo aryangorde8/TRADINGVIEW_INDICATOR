@@ -1,8 +1,9 @@
 """Live precision/recall harness against the hand-labeled JSONL.
 
 Run with:  pytest -m eval -s
-(plain `pytest` skips this module — it needs Anthropic credentials and
-spends tokens).
+(plain `pytest` skips this module — it needs a live LLM backend. The default
+engine is the free local Ollama model; no Anthropic credentials or paid
+tokens are required unless FALLACY_AUDITOR_EVAL_ENGINE is set to fable/opus.)
 
 Environment knobs:
     FALLACY_AUDITOR_EVAL_ENGINE   ollama (default, free) | fable | opus

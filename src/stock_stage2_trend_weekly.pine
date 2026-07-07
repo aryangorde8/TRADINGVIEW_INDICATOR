@@ -30,8 +30,12 @@
 // SIZING   : one position per symbol, full equity of the per-symbol account
 //            (or your portfolio slot). Portfolio use: run across a fixed
 //            liquid watchlist; expect <1 trade per name per year.
-// COSTS    : delivery equity ~0.2%/side. NON-REPAINT: weekly confirmed-bar
-//            closes only; no request.security; fills at bar close.
+// COSTS    : 0.25%/side commission (matches the Python replication's all-in
+//            0.25%/side that produced the PF figures above), PLUS ~5 ticks
+//            slippage modelled separately here — so this Pine backtest is
+//            marginally MORE conservative than the replication, not less.
+//            NON-REPAINT: weekly confirmed-bar closes only; no
+//            request.security; fills at bar close.
 // DO NOT   : tune the 52/30/4 lengths — they are the literature-standard,
 //            tested config. A failed forward test rejects the system.
 // =============================================================================
@@ -46,8 +50,8 @@ strategy(
      default_qty_type        = strategy.percent_of_equity,
      default_qty_value       = 100,
      commission_type         = strategy.commission.percent,
-     commission_value        = 0.2,
-     slippage                = 5,
+     commission_value        = 0.25,                  // matches replication (0.25%/side all-in)
+     slippage                = 5,                     // ~extra realism on top; do not remove
      currency                = currency.INR,
      max_labels_count        = 500)
 

@@ -1,0 +1,8 @@
+trades: 354  wins: 172  losses: 182  win rate: 48.6%
+gross profit: 1020154852.20  gross loss: 270208802.18
+PROFIT FACTOR: 3.78   (bootstrap 95% CI: 1.17 .. 10.25)
+expectancy/trade: 2118491.67  max consecutive losses: 8  max drawdown: 84369774.52
+robustness:
+  PF first half: 15.00   second half: 1.99
+  PF without top winner: 2.27   without top 3: 1.57
+no fragility warnings

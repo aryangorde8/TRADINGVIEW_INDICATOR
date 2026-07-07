@@ -43,40 +43,6 @@ def weekly(name: str) -> pd.DataFrame | None:
     return w
 
 
-def simulate(w: pd.DataFrame) -> list[dict]:
-    trades = []
-    equity = START
-    qty = 0.0
-    entry_px = 0.0
-    entry_date = None
-    for date, row in w.iterrows():
-        if pd.isna(row.sma30) or pd.isna(row.anchor):
-            continue
-        if qty > 0:
-            if row.c < row.sma30:
-                gross = (row.c - entry_px) * qty
-                costs = (entry_px + row.c) * qty * COST
-                pnl = gross - costs
-                equity += entry_px * qty + pnl - entry_px * qty + 0  # equity += proceeds - cost basis handled below
-                trades.append({
-                    "Entry Date": entry_date.date(), "Exit Date": date.date(),
-                    "Days Held": (date - entry_date).days,
-                    "Entry": round(entry_px, 2), "Exit": round(row.c, 2),
-                    "Profit INR": round(pnl, 2),
-                })
-                qty = 0.0
-            continue
-        if row.c > row.anchor and row.c > row.sma30 and row.rising:
-            qty = equity // row.c
-            if qty < 1:
-                qty = 0.0
-                continue
-            entry_px = row.c
-            entry_date = date
-            equity -= 0  # cash accounting folded into pnl on exit
-    return trades
-
-
 def pf(profits: list[float]) -> float:
     gp = sum(p for p in profits if p > 0)
     gl = -sum(p for p in profits if p < 0)
