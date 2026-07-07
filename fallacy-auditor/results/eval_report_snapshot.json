@@ -1,0 +1,676 @@
+[
+  {
+    "timestamp": "2026-07-07T14:38:08+00:00",
+    "engine": "ollama",
+    "examples": 44,
+    "raw": {
+      "micro": {
+        "precision": 0.69,
+        "recall": 0.763,
+        "tp": 29,
+        "fp": 13,
+        "fn": 9
+      },
+      "per_fallacy": {
+        "survivorship_bias": {
+          "precision": 0.75,
+          "recall": 0.857,
+          "tp": 6,
+          "fp": 2,
+          "fn": 1
+        },
+        "lookahead_bias": {
+          "precision": 0.5,
+          "recall": 0.429,
+          "tp": 3,
+          "fp": 3,
+          "fn": 4
+        },
+        "overfitting": {
+          "precision": 0.75,
+          "recall": 1.0,
+          "tp": 9,
+          "fp": 3,
+          "fn": 0
+        },
+        "base_rate_neglect": {
+          "precision": 0.571,
+          "recall": 0.571,
+          "tp": 4,
+          "fp": 3,
+          "fn": 3
+        },
+        "unfalsifiable": {
+          "precision": 0.778,
+          "recall": 0.875,
+          "tp": 7,
+          "fp": 2,
+          "fn": 1
+        }
+      }
+    },
+    "rows": [
+      {
+        "id": "survivorship-1",
+        "gold": [
+          "survivorship_bias"
+        ],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "survivorship-2",
+        "gold": [
+          "survivorship_bias"
+        ],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "survivorship-3",
+        "gold": [
+          "survivorship_bias"
+        ],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "lookahead-1",
+        "gold": [
+          "lookahead_bias"
+        ],
+        "raw": [
+          "base_rate_neglect",
+          "lookahead_bias"
+        ],
+        "verified": [
+          "base_rate_neglect",
+          "lookahead_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "lookahead-2",
+        "gold": [
+          "lookahead_bias"
+        ],
+        "raw": [
+          "lookahead_bias"
+        ],
+        "verified": [
+          "lookahead_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "lookahead-3",
+        "gold": [
+          "lookahead_bias"
+        ],
+        "raw": [
+          "lookahead_bias"
+        ],
+        "verified": [
+          "lookahead_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "overfitting-1",
+        "gold": [
+          "overfitting"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "overfitting-2",
+        "gold": [
+          "overfitting"
+        ],
+        "raw": [
+          "lookahead_bias",
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": [
+          {
+            "fallacy": "lookahead_bias",
+            "reason": "The text does not use future information to make a past decision; it simply states an outcome after tuning parameters on historical data."
+          }
+        ]
+      },
+      {
+        "id": "overfitting-3",
+        "gold": [
+          "overfitting"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "baserate-1",
+        "gold": [
+          "base_rate_neglect"
+        ],
+        "raw": [
+          "base_rate_neglect"
+        ],
+        "verified": [
+          "base_rate_neglect"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "baserate-2",
+        "gold": [
+          "base_rate_neglect"
+        ],
+        "raw": [
+          "base_rate_neglect"
+        ],
+        "verified": [
+          "base_rate_neglect"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "baserate-3",
+        "gold": [
+          "base_rate_neglect"
+        ],
+        "raw": [
+          "base_rate_neglect"
+        ],
+        "verified": [
+          "base_rate_neglect"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "unfalsifiable-1",
+        "gold": [
+          "unfalsifiable"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "unfalsifiable-2",
+        "gold": [
+          "unfalsifiable"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "unfalsifiable-3",
+        "gold": [
+          "unfalsifiable"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "multi-1",
+        "gold": [
+          "overfitting",
+          "unfalsifiable"
+        ],
+        "raw": [
+          "overfitting",
+          "unfalsifiable"
+        ],
+        "verified": [
+          "overfitting",
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "clean-1",
+        "gold": [],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "overfitting",
+            "reason": "The text explicitly mentions testing on held-out data, which avoids overfitting."
+          }
+        ]
+      },
+      {
+        "id": "clean-2",
+        "gold": [],
+        "raw": [
+          "base_rate_neglect"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "base_rate_neglect",
+            "reason": "The span explicitly provides the base rate and compares it to the signal's performance, avoiding base-rate neglect."
+          }
+        ]
+      },
+      {
+        "id": "survivorship-4",
+        "gold": [
+          "survivorship_bias"
+        ],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "survivorship-5",
+        "gold": [
+          "survivorship_bias"
+        ],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "survivorship-6",
+        "gold": [
+          "survivorship_bias"
+        ],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "lookahead-4",
+        "gold": [
+          "lookahead_bias"
+        ],
+        "raw": [],
+        "verified": [],
+        "verifier_rejected": []
+      },
+      {
+        "id": "lookahead-5",
+        "gold": [
+          "lookahead_bias"
+        ],
+        "raw": [],
+        "verified": [],
+        "verifier_rejected": []
+      },
+      {
+        "id": "lookahead-6",
+        "gold": [
+          "lookahead_bias"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "unfalsifiable",
+            "reason": "The span explicitly states why 2020 was excluded, providing a clear rationale. It does not claim that any outcome would confirm or disprove the strategy's validity."
+          }
+        ]
+      },
+      {
+        "id": "overfitting-4",
+        "gold": [
+          "overfitting"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "overfitting",
+            "reason": "The text explicitly mentions both in-sample and out-of-sample validation, which avoids overfitting as defined by the rubric."
+          }
+        ]
+      },
+      {
+        "id": "overfitting-5",
+        "gold": [
+          "overfitting"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "overfitting-6",
+        "gold": [
+          "overfitting"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "overfitting",
+            "reason": "The text explicitly states that multiple parameter sets were used to achieve a smooth equity curve, but does not indicate that these were tuned on the same data and lack out-of-sample validation."
+          }
+        ]
+      },
+      {
+        "id": "baserate-4",
+        "gold": [
+          "base_rate_neglect"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "unfalsifiable",
+            "reason": "The span does not frame the claim in a way that makes it unfalsifiable. It explicitly states the outcome and provides a clear indication of what the model is supposed to do."
+          }
+        ]
+      },
+      {
+        "id": "baserate-5",
+        "gold": [
+          "base_rate_neglect"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "baserate-6",
+        "gold": [
+          "base_rate_neglect"
+        ],
+        "raw": [
+          "base_rate_neglect"
+        ],
+        "verified": [
+          "base_rate_neglect"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "unfalsifiable-4",
+        "gold": [
+          "unfalsifiable"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "unfalsifiable-5",
+        "gold": [
+          "unfalsifiable"
+        ],
+        "raw": [
+          "lookahead_bias"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "lookahead_bias",
+            "reason": "The span does not use future data in an entry/exit rule or rely on hindsight. It explains a failure as part of a larger pattern."
+          }
+        ]
+      },
+      {
+        "id": "unfalsifiable-6",
+        "gold": [
+          "unfalsifiable"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "multi-2",
+        "gold": [
+          "base_rate_neglect",
+          "overfitting"
+        ],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "multi-3",
+        "gold": [
+          "survivorship_bias",
+          "unfalsifiable"
+        ],
+        "raw": [
+          "unfalsifiable"
+        ],
+        "verified": [
+          "unfalsifiable"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "multi-4",
+        "gold": [
+          "lookahead_bias",
+          "overfitting"
+        ],
+        "raw": [
+          "base_rate_neglect",
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": [
+          {
+            "fallacy": "base_rate_neglect",
+            "reason": "The span does not omit the base rate; it explicitly mentions picking the top performers, which implies a context where the base rate is considered."
+          }
+        ]
+      },
+      {
+        "id": "clean-3",
+        "gold": [],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [
+          "survivorship_bias"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "clean-4",
+        "gold": [],
+        "raw": [
+          "lookahead_bias"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "lookahead_bias",
+            "reason": "The span explicitly states that higher-timeframe data is offset by one completed bar, avoiding lookahead bias."
+          }
+        ]
+      },
+      {
+        "id": "clean-5",
+        "gold": [],
+        "raw": [
+          "overfitting"
+        ],
+        "verified": [
+          "overfitting"
+        ],
+        "verifier_rejected": []
+      },
+      {
+        "id": "clean-6",
+        "gold": [],
+        "raw": [],
+        "verified": [],
+        "verifier_rejected": []
+      },
+      {
+        "id": "clean-7",
+        "gold": [],
+        "raw": [],
+        "verified": [],
+        "verifier_rejected": []
+      },
+      {
+        "id": "clean-8",
+        "gold": [],
+        "raw": [],
+        "verified": [],
+        "verifier_rejected": []
+      },
+      {
+        "id": "clean-9",
+        "gold": [],
+        "raw": [
+          "survivorship_bias"
+        ],
+        "verified": [],
+        "verifier_rejected": [
+          {
+            "fallacy": "survivorship_bias",
+            "reason": "The text explicitly states that delisted tickers are included up to their delisting dates, which means the full population is accounted for, including failures."
+          }
+        ]
+      },
+      {
+        "id": "clean-10",
+        "gold": [],
+        "raw": [],
+        "verified": [],
+        "verifier_rejected": []
+      }
+    ],
+    "verified": {
+      "micro": {
+        "precision": 0.871,
+        "recall": 0.711,
+        "tp": 27,
+        "fp": 4,
+        "fn": 11
+      },
+      "per_fallacy": {
+        "survivorship_bias": {
+          "precision": 0.857,
+          "recall": 0.857,
+          "tp": 6,
+          "fp": 1,
+          "fn": 1
+        },
+        "lookahead_bias": {
+          "precision": 1.0,
+          "recall": 0.429,
+          "tp": 3,
+          "fp": 0,
+          "fn": 4
+        },
+        "overfitting": {
+          "precision": 0.778,
+          "recall": 0.778,
+          "tp": 7,
+          "fp": 2,
+          "fn": 2
+        },
+        "base_rate_neglect": {
+          "precision": 0.8,
+          "recall": 0.571,
+          "tp": 4,
+          "fp": 1,
+          "fn": 3
+        },
+        "unfalsifiable": {
+          "precision": 1.0,
+          "recall": 0.875,
+          "tp": 7,
+          "fp": 0,
+          "fn": 1
+        }
+      }
+    }
+  }
+]
