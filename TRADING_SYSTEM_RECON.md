@@ -123,10 +123,10 @@ yfinance for the scanner/replications) and **REAL-but-results-not-committed**
 ### Reproducible-from-repo vs. asserted-only (decisive for the resume)
 | Reported number | Status |
 |---|---|
-| PF 3.53 / 3.78 (39-name universes) | **Reproducible-by-running** `replicate_stage2.py` (needs internet; will drift as Yahoo adds bars); **not committed**; survivorship-biased |
+| PF 3.53 / 3.78 (39-name universes) | **Committed** — `results/backtests/*_pooled.csv` + `*_audit.txt`; regenerable (drifts with Yahoo); survivorship-biased |
 | PF 6.29 (Nifty 500), 2.44 (US) | Same — real script (`replicate_stage2_universe.py`), **no committed output** |
-| 23.8% CAGR / 23% maxDD (portfolio) | **Reproducible-by-running** `stage2_portfolio.py`; **not committed** |
-| Eval P 0.88 / R 0.74 (two-pass) | **Reproducible-by-running** `pytest -m eval -s` with Ollama; `eval_report.json` **gitignored** — the number is **not in the repo** |
+| 23.8% CAGR / 23% maxDD (portfolio) | **Committed** — `results/backtests/stage2_portfolio_snapshot.txt` (2026-07-09 run: 23.9%/23.6% modern; 25.3% full) |
+| Eval two-pass (committed: P 0.87 / R 0.71) | **Committed** — `fallacy-auditor/results/eval_report_snapshot.json`; regenerable with Ollama (`pytest -m eval -s`), runs vary a few points |
 | 44 examples, 79 tests, 5 fallacies | **Fully committed and verifiable** in the repo right now |
 
 **Bottom line:** the *methodology and code* are reproducible and real; the

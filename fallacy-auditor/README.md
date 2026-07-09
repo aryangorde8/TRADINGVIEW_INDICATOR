@@ -77,7 +77,7 @@ verifier's rejection bar was retuned. New numbers on the harder exam:
 | Pipeline | Precision | Recall | Wall time |
 |---|---|---|---|
 | Single-pass | 0.71 | 0.76 | — |
-| **Two-pass** | **0.88** | 0.74 | ~25 min |
+| **Two-pass** | **0.87** | 0.71 | ~25 min |
 
 What the harder exam revealed:
 
@@ -125,7 +125,9 @@ Opus 4.8 refusal fallback) or `AnthropicClient()` (Opus 4.8).
 
 Expectation-setting: local-model quality is whatever the eval says it is —
 measure, don't assume (see "Measured results" above; current baseline for
-the free default is P=0.88/R=0.74 two-pass on the hard 44-example set). The
+the free default is P=0.87/R=0.71 two-pass on the hard 44-example set —
+committed snapshot in `results/eval_report_snapshot.json`; runs vary a few
+points). The
 retry-then-fail-fast loop and the grounding gate were built for weaker
 models' failure modes (malformed JSON, near-miss quotes), so the guarantees
 hold on every engine; only the hit-rate differs.

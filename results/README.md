@@ -19,6 +19,13 @@ Headline figures in these snapshots: **universe 1 pooled PF 3.53** (CI
 `python3 tools/research/replicate_stage2.py` (creates the pooled CSVs), then
 `python3 -m fallacy_auditor <pooled.csv>`.
 
+- `stage2_portfolio_snapshot.txt` — the 10-slot shared-account portfolio
+  simulation (39 names, costs 0.25%/side). Committed snapshot: **full-period
+  CAGR 25.3% / maxDD 38.3%; modern era (2013+) 23.9% at 23.6% maxDD**.
+  Regenerate: `python3 tools/research/portfolio_sim.py` (fills data_cache/),
+  then `python3 tools/research/stage2_portfolio.py`. Same caveats: Yahoo
+  drift, survivorship-biased universe — methodology demo, not a track record.
+
 ### `../fallacy-auditor/results/`
 - `eval_report_snapshot.json` — one run of the two-pass precision/recall
   harness on the 44-example gold set using the local `qwen2.5:7b` model.

@@ -68,7 +68,8 @@ dual-edge) but the weekly Stage-2 is the champion.
   critiques. It has a two-pass verifier, a Pine Script linter (mechanical
   lookahead/repaint detection), a profit-factor fragility auditor (bootstrap
   CI, luck-concentration, time-stability), 79 tests, CI, and a 44-example
-  hand-labeled eval set (measured two-pass precision 0.88 / recall 0.74).
+  hand-labeled eval set (committed two-pass snapshot: precision 0.87 /
+  recall 0.71 — `fallacy-auditor/results/eval_report_snapshot.json`).
 - **A trade journal** with automatic profit-factor auditing (live PF vs the
   replication benchmark = my scorecard).
 - **A live value screen** (Greenblatt Magic Formula: cheap + high ROE),

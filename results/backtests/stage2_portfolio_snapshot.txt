@@ -1,0 +1,10 @@
+# stage2_portfolio.py snapshot — 2026-07-09
+# Regenerate: python3 tools/research/portfolio_sim.py (populates data_cache/),
+#             python3 tools/research/stage2_portfolio.py
+# Yahoo data drifts as bars are added; figures move within ~0.5pp of the
+# doc-cited 25.2% full / 23.8% modern. Survivorship-biased 39-name universe.
+
+names loaded: 39  round-trips: 397
+FULL ~29y : CAGR 25.3%  maxDD 38.3%  final 96.4 cr
+MODERN 13+: CAGR 23.9%  maxDD 23.6%  neg years 4/14  worst -14.4%
+modern yearly: 2013:+27%  2014:+77%  2015:+20%  2016:+9%  2017:+43%  2018:-5%  2019:+22%  2020:+147%  2021:+15%  2022:-1%  2023:+31%  2024:+21%  2025:-1%  2026:-14%
