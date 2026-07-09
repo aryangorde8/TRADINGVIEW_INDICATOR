@@ -72,7 +72,7 @@ single trades of +742% to +1,086% in the midcap tests).
 | 39 NSE large caps, 2 universes | pooled PF 3.53 / 3.78 — passed its pre-registered bar |
 | Full Nifty 500 (441 names, 5,048 trades) | pooled PF 6.29 (upper bound), **breadth 87% of names profitable** |
 | 64 US large caps incl. 9 famous duds | PF 2.44 (CI 1.97-3.06), **98% breadth** — the edge travels |
-| Portfolio (10 slots, 39 names) | full-period 25.2% CAGR (₹10L→₹95cr/29y); modern era 23.8% at 23% maxDD |
+| Portfolio (10 slots, 39 names) | committed snapshot (2026-07-09): full 25.3% CAGR (₹10L→₹96cr/29y); modern 23.9% at 23.6% maxDD — `results/backtests/stage2_portfolio_snapshot.txt` |
 | Ex-moonshot floor (honest planning number) | **~15-16% CAGR, maxDD ~25-35%, 3-4 losing years per decade** |
 | Holding periods | winners median 266d (29% >1yr → LTCG), losers median 84d |
 

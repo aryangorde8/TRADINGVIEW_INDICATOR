@@ -206,7 +206,7 @@ wherever you run it):
 | Script | Reproduces |
 |---|---|
 | `replicate_stage2.py` | Stage-2 per-name PFs, both universes (the champion's evidence) |
-| `stage2_portfolio.py` | Stage-2 10-slot portfolio: ~25% CAGR full period / 23.8% modern, ₹10L→₹95cr backtest |
+| `stage2_portfolio.py` | Stage-2 10-slot portfolio: ~25% CAGR full / 23.9% modern (committed snapshot in `results/backtests/`) |
 | `replicate_ribbon.py` | Ribbon-pullback replication (both universes) |
 | `replicate_52wk.py` | 52wk daily breakout replication |
 | `replicate_stage2_pyramid.py` | The pyramiding variant (REJECTED — halved terminal equity; kept as proof) |
