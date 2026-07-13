@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -116,3 +117,61 @@ def test_cli_bad_csv_exits_2(tmp_path, capsys):
     path = tmp_path / "trades.csv"
     path.write_text("a,b\n1,2\n")
     assert main([str(path)]) == 2
+
+
+# ---- relative-degradation checks (found by auditing the auditor) ----
+
+
+def test_relative_top3_drop_fires_without_crossing_the_floor():
+    """PF 5.0 -> 2.0 on top-3 removal (-60%): never dips below 1.0, so the
+    ORIGINAL absolute check stays silent. The relative check must catch it.
+
+    Gross profit 500 (three 100s + ten 20s), gross loss 100 (ten -10s).
+    Removing the top 3 leaves 200/100 = 2.0 — still above the floor.
+    """
+    profits = [100.0] * 3 + [20.0] * 10 + [-10.0] * 10
+    stats = audit_trades(profits)
+    assert stats.profit_factor == pytest.approx(5.0)
+    assert stats.pf_excl_top3 == pytest.approx(2.0)
+    assert stats.pf_excl_top3 > 1.0  # absolute floor NOT breached
+    assert any("concentrated edge" in w for w in stats.warnings)
+    assert not any("drops the profit factor below 1.0" in w for w in stats.warnings)
+
+
+def test_relative_half_decay_fires_without_crossing_the_floor():
+    """Second half retains ~20% of the first half's PF, but both halves stay
+    above 1.0 — invisible to the original absolute check."""
+    first = [50.0, 50.0, 50.0, 50.0, -5.0, -5.0]        # PF = 20
+    second = [12.0, 12.0, 12.0, 12.0, -10.0, -10.0]     # PF = 2.4
+    stats = audit_trades(first + second)
+    assert stats.pf_first_half > 1.0 and stats.pf_second_half > 1.0
+    assert any("decaying edge" in w for w in stats.warnings)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+U2_POOLED = REPO_ROOT / "results/backtests/stage2_universe2_oos_pooled.csv"
+
+
+@pytest.mark.skipif(
+    not U2_POOLED.exists(),
+    reason="U2 pooled backtest CSV not present (fallacy-auditor used standalone)",
+)
+def test_real_u2_backtest_now_warns():
+    """The regression that motivated these thresholds.
+
+    The committed universe-2 pooled backtest (354 trades) has PF 3.78 which
+    collapses to 1.57 when 3 trades are removed, and a second half worth ~13%
+    of its first. Under the original absolute-floor-only checks it emitted
+    'no fragility warnings'. It must not be silent any more.
+    """
+    stats = audit_trades(parse_trades_csv(U2_POOLED.read_text()))
+
+    # the conditions the old checks missed — both stay above the 1.0 floor
+    assert stats.profit_factor == pytest.approx(3.78, abs=0.02)
+    assert stats.pf_excl_top3 == pytest.approx(1.57, abs=0.02)
+    assert stats.pf_excl_top3 > 1.0
+    assert stats.pf_first_half > 1.0 and stats.pf_second_half > 1.0
+
+    # ...and are now caught
+    assert any("concentrated edge" in w for w in stats.warnings)
+    assert any("decaying edge" in w for w in stats.warnings)

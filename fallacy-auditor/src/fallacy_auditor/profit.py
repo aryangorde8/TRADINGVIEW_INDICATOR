@@ -28,6 +28,22 @@ SMALL_SAMPLE = 30
 BOOTSTRAP_ROUNDS = 1000
 BOOTSTRAP_SEED = 7  # fixed: the report must be reproducible
 
+# Relative-degradation thresholds. These exist because auditing this auditor
+# exposed a hole: every original check was an ABSOLUTE floor at PF 1.0, so a
+# result could collapse catastrophically and still pass silently. The real
+# case that motivated them: a 354-trade pooled backtest whose PF fell 3.78 ->
+# 1.57 when 3 trades (0.85% of the sample) were removed, and whose second half
+# decayed 7.5x versus its first — and which emitted "no fragility warnings",
+# because 1.57 and 1.99 are both above 1.0. A number staying above the floor
+# says nothing about how far it fell to get there.
+#
+# 0.40 is a judgment call, not a derived constant: an edge that surrenders
+# more than 40% of its profit factor to its top 3 trades, or whose second half
+# retains under 40% of its first half, is concentrated or decaying enough that
+# a human should look. Both are flags for review, not verdicts.
+PF_DROP_TOP3_WARN = 0.40  # warn if PF falls >40% when the top 3 are removed
+HALF_DECAY_WARN = 0.40  # warn if second-half PF < 40% of first-half PF
+
 
 class TradeStats(BaseModel):
     """The profit-factor audit report."""
@@ -186,6 +202,21 @@ def audit_trades(profits: list[float]) -> TradeStats:
             "fragile edge: removing the top 3 winners drops the profit "
             "factor below 1.0 — the result is concentrated in a few trades"
         )
+    # Relative degradation on top-3 removal. The absolute check above only
+    # fires when PF crosses below 1.0; a PF that falls 3.78 -> 1.57 (-58%)
+    # stays above the floor and would otherwise pass silently.
+    if (
+        pf is not None
+        and pf > 0
+        and pf_top3 is not None
+        and (pf - pf_top3) / pf > PF_DROP_TOP3_WARN
+    ):
+        drop = (pf - pf_top3) / pf
+        warnings.append(
+            f"concentrated edge: removing the top 3 winners cuts the profit "
+            f"factor by {drop:.0%} ({pf:.2f} -> {pf_top3:.2f}) — a large share "
+            f"of the result rests on {min(3, n)} of {n} trades"
+        )
     if profits and gross_profit > 0 and max(profits) > 0.5 * gross_profit:
         warnings.append(
             "a single trade contributes more than half of all gross profit"
@@ -201,6 +232,20 @@ def audit_trades(profits: list[float]) -> TradeStats:
         warnings.append(
             "unstable across time: one half of the trade history has a "
             "profit factor below 1.0 despite the overall result"
+        )
+    # Relative time decay. The absolute check above only fires if a half drops
+    # below 1.0; a second half that retains 13% of the first (15.00 -> 1.99)
+    # stays above the floor and would otherwise pass silently.
+    if (
+        pf_first is not None
+        and pf_second is not None
+        and pf_first > 0
+        and pf_second / pf_first < HALF_DECAY_WARN
+    ):
+        warnings.append(
+            f"decaying edge: the second half's profit factor is "
+            f"{pf_second / pf_first:.0%} of the first half's "
+            f"({pf_first:.2f} -> {pf_second:.2f}) — the edge weakened over time"
         )
     if ci_low is not None and ci_low < 1.0 <= (pf or 0):
         warnings.append(

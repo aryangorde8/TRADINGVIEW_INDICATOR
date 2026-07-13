@@ -1,10 +1,14 @@
-# stage2_portfolio.py snapshot — 2026-07-09
-# Regenerate: python3 tools/research/portfolio_sim.py (populates data_cache/),
-#             python3 tools/research/stage2_portfolio.py
-# Yahoo data drifts as bars are added; figures move within ~0.5pp of the
-# doc-cited 25.2% full / 23.8% modern. Survivorship-biased 39-name universe.
+names loaded: 39   round-trips: 397
+period: 1996-01-05 -> 2026-07-10  (30.5 years)
+start NAV: 1,000,000   end NAV: 964,313,477 (964.3x, 96.4 cr)
 
-names loaded: 39  round-trips: 397
-FULL ~29y : CAGR 25.3%  maxDD 38.3%  final 96.4 cr
-MODERN 13+: CAGR 23.9%  maxDD 23.6%  neg years 4/14  worst -14.4%
-modern yearly: 2013:+27%  2014:+77%  2015:+20%  2016:+9%  2017:+43%  2018:-5%  2019:+22%  2020:+147%  2021:+15%  2022:-1%  2023:+31%  2024:+21%  2025:-1%  2026:-14%
+FULL PERIOD : CAGR 25.3%   maxDD 38.3%
+MODERN 2013+: CAGR 23.9%   maxDD 23.6%   (includes partial 2026)
+
+COMPLETE YEARS 2013-2025 (13 yrs): CAGR 26.6%
+  ... excluding 2020 (12 yrs): CAGR 19.7%   [2020 alone contributes +6.9pp]
+PARTIAL 2026 (year to 2026-07-10): -14.4% — NOT comparable to complete years
+
+complete-year returns: 2013:+27%  2014:+77%  2015:+20%  2016:+9%  2017:+43%  2018:-5%  2019:+22%  2020:+147%  2021:+15%  2022:-1%  2023:+31%  2024:+21%  2025:-1%
+
+equity curve -> results/backtests/stage2_portfolio_equity.csv (1593 weekly rows)

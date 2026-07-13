@@ -93,7 +93,9 @@ def test_request_payload_shape(stub_server):
     ]
     assert body["format"] == AUDIT_OUTPUT_SCHEMA  # schema-constrained output
     assert body["stream"] is False
-    assert body["options"] == {"temperature": 0, "num_ctx": 8192}
+    # seed is pinned alongside temperature: temperature 0 alone does not make
+    # Ollama's sampler deterministic, so eval numbers drifted between runs.
+    assert body["options"] == {"temperature": 0, "seed": 7, "num_ctx": 8192}
     # non-thinking model: the think parameter must not be sent at all
     # (Ollama rejects it for models without the capability)
     assert "think" not in body

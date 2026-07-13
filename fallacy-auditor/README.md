@@ -186,11 +186,34 @@ the profit factor:
   resampling luck alone erase the edge?
 - **sample-size warning** below 30 trades — the base-rate problem in trade
   form.
+- **relative degradation** — PF falling >40% when the top 3 trades are
+  removed, or a second half worth <40% of the first.
 
 Exit code 1 when any fragility warning fires, so a "great backtest" that is
 three lucky trades in a trench coat fails the gate. It never judges whether
 a profit factor is *good enough* — that threshold is yours; it judges
 whether the number can be trusted at all. Rows are assumed chronological.
+
+### The relative thresholds exist because this auditor failed its own audit
+
+The first version of these checks were **all absolute floors at PF 1.0**: they
+fired only if a profit factor *crossed below 1*. Auditing the auditor against a
+real 355-trade backtest exposed the hole — that result's PF fell **3.77 → 1.57**
+when 3 trades (0.85% of the sample) were removed, and its second half was worth
+**13%** of its first, and it emitted **"no fragility warnings"**, because 1.57
+and 1.99 are both above 1.0. *A number staying above the floor says nothing
+about how far it fell to get there.*
+
+The `PF_DROP_TOP3_WARN` / `HALF_DECAY_WARN` thresholds (both 0.40) close that
+hole, and `tests/test_profit.py` pins the regression by feeding that exact
+backtest and asserting the warnings now fire. The 0.40 values are a **judgment
+call, not a derived constant** — they are flags for review, not verdicts.
+
+A caution learned from the same exercise: these checks operate on whatever
+P&L column you hand them. If your per-trade P&L is denominated in currency and
+your backtest compounds, the column is **size-weighted** and the concentration
+it reports may be an artifact of *when* trades happened, not how extreme they
+were. Audit percentage returns when you can.
 
 ## Tests and eval
 

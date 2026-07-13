@@ -6,7 +6,8 @@ git_*.deb
 __pycache__/
 *.pyc
 .pytest_cache/
-data_cache/
 *.egg-info/
 tools/journal.csv
 tools/breadth_log.csv
+# data_cache/ is NOT ignored: the parquet price snapshot is pinned and
+# committed so published backtest figures are reproducible (MANIFEST.md).

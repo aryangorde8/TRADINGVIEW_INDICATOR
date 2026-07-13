@@ -1,8 +1,9 @@
-trades: 354  wins: 172  losses: 182  win rate: 48.6%
-gross profit: 1020154852.20  gross loss: 270208802.18
-PROFIT FACTOR: 3.78   (bootstrap 95% CI: 1.17 .. 10.25)
-expectancy/trade: 2118491.67  max consecutive losses: 8  max drawdown: 84369774.52
+trades: 355  wins: 172  losses: 183  win rate: 48.5%
+gross profit: 1020143620.94  gross loss: 270714524.20
+PROFIT FACTOR: 3.77   (bootstrap 95% CI: 1.27 .. 9.85)
+expectancy/trade: 2111067.88  max consecutive losses: 8  max drawdown: 85169971.70
 robustness:
   PF first half: 15.00   second half: 1.99
-  PF without top winner: 2.27   without top 3: 1.57
-no fragility warnings
+  PF without top winner: 2.26   without top 3: 1.57
+WARNING: concentrated edge: removing the top 3 winners cuts the profit factor by 58% (3.77 -> 1.57) — a large share of the result rests on 3 of 355 trades
+WARNING: decaying edge: the second half's profit factor is 13% of the first half's (15.00 -> 1.99) — the edge weakened over time

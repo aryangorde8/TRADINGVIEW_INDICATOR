@@ -1,0 +1,57 @@
+# data_cache — PINNED price snapshot
+
+**Fetched: 2026-07-14** from Yahoo Finance (`yfinance`, `period=max`, `interval=1d`, `auto_adjust=True`).
+
+These parquet files are the **exact inputs** the committed Stage-2
+figures were computed from. They are committed (not gitignored) so a
+fresh clone reproduces the published numbers byte-for-byte.
+
+**Why pinning matters:** `auto_adjust=True` restates the *entire*
+historical series on every split/dividend — past prices change, not
+just recent ones. Re-fetching therefore silently moves old results.
+Do not regenerate these files to 'refresh' them; a refresh is a new
+dataset and requires republishing every dependent figure.
+
+39 series. Verify integrity with `python3 tools/research/pin_data.py --verify`.
+
+| Series | Rows | First bar | Last bar | SHA256 |
+|---|---:|---|---|---|
+| ADANIGREEN | 1992 | 2018-06-18 | 2026-07-09 | `29237458f45c09ac07a9c83c7fbf916b2e6080e226ee9707e632c07d822940d8` |
+| ADANIPORTS | 4591 | 2007-11-27 | 2026-07-09 | `277d5b444d1115af8e1d7c16853bc2ecc0b50143f6dbd843a3ba03c8a4c79271` |
+| ASIANPAINT | 5965 | 2002-07-01 | 2026-07-09 | `bfb5430b7c7ef9e005e11cbdf2eb295ff6a5e32d85cd6d61a137c0b5cd115fca` |
+| AXISBANK | 6901 | 1998-11-27 | 2026-07-09 | `2d725b12182d367e562f23bffc3fa5aed3a3ce9af3c9b938bee8ba660216193f` |
+| BAJAJFINSV | 5934 | 2002-08-12 | 2026-07-09 | `f67a666cd9286e9710ce53ff934ecd980e93e5503c887140154d9ad5f18c6663` |
+| BAJFINANCE | 5965 | 2002-07-01 | 2026-07-09 | `0651d64bae9689c3a9e95bd7451b7a2c5697980dd76f28b13adb2d456f0480c4` |
+| BHARTIARTL | 5965 | 2002-07-01 | 2026-07-09 | `0d6a9a7da25858ef7261149f6f121bfaa217c7f0721c453e910d34acb75ce230` |
+| BRITANNIA | 7662 | 1996-01-02 | 2026-07-09 | `bd854b1095319c0b5806eb526b2629e32831aa49ed52f170111d3ec3ee969aff` |
+| CIPLA | 7662 | 1996-01-01 | 2026-07-09 | `f130a464ea8d9b18b374baae4a688f508b3798ebb9e8993f7a877fa9d47268bf` |
+| COALINDIA | 3868 | 2010-11-04 | 2026-07-09 | `f04b65fd2e8861577fb5c355b8b80b2f9889df245066e2e4d3e88a9500008aa7` |
+| DABUR | 5965 | 2002-07-01 | 2026-07-09 | `5fee9b2b9232cf336a5049cdae22de768a5afc57e2dc9fcae463ca9d74efee7b` |
+| DRREDDY | 7660 | 1996-01-01 | 2026-07-09 | `ee3c0707dc964a942183f3c5cefd0eff215cb19bdd78eaa1eeb05cb9c7b4db88` |
+| EICHERMOT | 7660 | 1996-01-01 | 2026-07-09 | `7a0ce8489f80efeeacb576c697d38bd840552ac3691078bc0365ed14c8f9bc06` |
+| HCLTECH | 5939 | 2002-08-12 | 2026-07-09 | `a3bd7df687a3f6ad7a5b6fe2e33d04bffee449e5d075edcc3a5ed487c6be4667` |
+| HDFCBANK | 7663 | 1996-01-01 | 2026-07-09 | `36de347fa3aced70ec6ad0577ef90b9f243a25d1df194c9607444d9f4dc1eda9` |
+| HEROMOTOCO | 5965 | 2002-07-01 | 2026-07-09 | `1c2d8a7952857b04fc5cc0b2648285f80f9b2c0ae1e950bc0f6bbd8fe86f3a85` |
+| HINDALCO | 7663 | 1996-01-01 | 2026-07-09 | `e508468c4e61793633d6c0f1f560dcc0ad277df5bfa2edc22f0103e4398648d7` |
+| HINDUNILVR | 7663 | 1996-01-01 | 2026-07-09 | `4b270d7af9441b001003791caca7f1d356ba1e60f72257176da22d3438db36ae` |
+| ICICIBANK | 5965 | 2002-07-01 | 2026-07-09 | `4f27d3dbcce5fef8ac7f4e6d3d60ea30b207c026f166727979b3dbfee783f7ad` |
+| INFY | 7663 | 1996-01-01 | 2026-07-09 | `ff6cd1ba1020bba9b825736ce5a288b81965e643b1c4d510157248ec38cb1e12` |
+| ITC | 7660 | 1996-01-01 | 2026-07-09 | `6bd8d4dc31df76a8d4f05fc2a45e8a2e2860c190ce8ff23e559af1ed37ebd65b` |
+| JSWSTEEL | 5745 | 2003-05-08 | 2026-07-09 | `9c1055b195931c9a1b28636bc4d3281f47c8475776bd0ddb1ec713dba1716916` |
+| KOTAKBANK | 6227 | 2001-07-02 | 2026-07-09 | `8127b6b25b944f7b595a5243ecbf9f91e3b5ab09e373d49332fadab13d0bb312` |
+| LT | 5968 | 2002-07-01 | 2026-07-09 | `800ecddadbec4ddb475a0d3a6995480d4980960f7465fd05ef7d4b40d159dea9` |
+| MARUTI | 5701 | 2003-07-09 | 2026-07-09 | `e3a3e9de6a0148badc37ae20e72b10e391cc59c82c94aa38b72228038899e001` |
+| NESTLEIND | 5938 | 2002-08-12 | 2026-07-09 | `0a89abed750c2d9abfd1719b8e2634ca688f00801428454136984e93568b3e53` |
+| NTPC | 5354 | 2004-11-05 | 2026-07-09 | `0175f1c6e4763dd4ea9d0736c263768d0f5dcbfd05e886d5a817fee4895ab560` |
+| ONGC | 7660 | 1996-01-01 | 2026-07-09 | `bbc3a4b9462362b6090e111c6cd7059e903f1ca0386862bf2101576e3e1242b2` |
+| POWERGRID | 4627 | 2007-10-05 | 2026-07-09 | `03c7d2e83e3243fc1182a0d83b303f6c9075e60bd3ac6f20c2971534d62d5ed7` |
+| RELIANCE | 7660 | 1996-01-01 | 2026-07-09 | `af2a46e95eedb5be9d622a0507e692fbfbd254c2a7fd9b964206961291bcdd31` |
+| SBIN | 7661 | 1996-01-01 | 2026-07-09 | `a8043a24e0acb2323fdfcae1a709c97c7d16b1e4437b25a51fddc5f0b7f36e78` |
+| SUNPHARMA | 7663 | 1996-01-01 | 2026-07-09 | `73569d3036a459c0965c4ce9af9588e4eef2e2d96823231d186a5eb4e0a002e7` |
+| TATASTEEL | 7663 | 1996-01-01 | 2026-07-09 | `b9204d2f0a9415130cc6aeba07568702033c23911823cdbc214e4b96638507ae` |
+| TCS | 5936 | 2002-08-12 | 2026-07-09 | `526c9da5fe16471d268087e726c1ec3d0cee881590b1c9faa3e90ec72bc11047` |
+| TECHM | 4902 | 2006-08-28 | 2026-07-09 | `e9c697d005cd2031822dc403170860bc2bf59315c0af88f518edc20a891913a2` |
+| TITAN | 7663 | 1996-01-01 | 2026-07-09 | `ebb93d42d5cca3b6c9d29f73ce24d6a95a40483fd505cce01bc71f9c7a7dbb53` |
+| ULTRACEMCO | 5935 | 2002-08-12 | 2026-07-09 | `db9e984a467813477eb68805992776dafd5c8ef20550848d8a4073d6273608d7` |
+| VEDL | 7663 | 1996-01-01 | 2026-07-09 | `a482246636f29d13c8c093592f58d688d5a9e7cd751de2334e826ee89297c3c8` |
+| WIPRO | 7663 | 1996-01-01 | 2026-07-09 | `a33d32c18749f0bd9a370c07ebcc68dd128c7d99a570a5ee2dca1dc2f29b04f0` |

@@ -1,0 +1,41 @@
+==============================================================================
+RUPEE vs PERCENT — the same trades, two measurement spaces
+==============================================================================
+                                                     U1                   U2
+------------------------------------------------------------------------------
+RUPEE SPACE (size-weighted — WITHDRAWN)
+  profit factor                                    3.53                 3.77
+  PF excl top-3                                    2.60                 1.57
+  mean P&L per trade (INR)                      1588030              2111068
+  bootstrap 95% CI                            2.11-5.82            1.27-9.85
+
+PERCENT SPACE (size-invariant — THE REPLACEMENT)
+  profit factor                                    6.43                 5.12
+  PF excl top-1                                    5.43                 4.63
+  PF excl top-3                                    4.67                 4.01
+  PF excl top-5                                    4.20                 3.73
+  bootstrap 95% CI                            4.28-9.66            3.51-7.55
+  PF first half                                    7.70                 6.30
+  PF second half                                   4.87                 3.55
+  mean return per trade                          26.26%               21.96%
+  median return per trade                         0.27%               -0.95%
+  stdev of returns                              118.91%               79.89%
+  top-1 share of gross gain                       15.7%                 9.6%
+  top-3 share of gross gain                       27.4%                21.8%
+
+DISTRIBUTION OF PER-TRADE RETURNS
+  min                                            -91.3%               -76.4%
+  p10                                            -12.8%               -13.7%
+  p25                                             -7.8%                -9.2%
+  p50                                              0.3%                -1.0%
+  p75                                             26.7%                25.2%
+  p90                                             74.8%                79.8%
+  max                                           1864.9%               934.4%
+
+UNAFFECTED BY THE BUG (count-based, not size-based)
+  trades                                            383                  355
+  win rate                                        50.7%                48.5%
+  max consecutive losses                             14                    8
+  mean hold, winners (days)                         321                  317
+  mean hold, losers (days)                           86                   97
+==============================================================================

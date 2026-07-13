@@ -49,6 +49,7 @@ OLLAMA_URL_ENV_VAR = "FALLACY_AUDITOR_OLLAMA_URL"
 OLLAMA_THINK_ENV_VAR = "FALLACY_AUDITOR_OLLAMA_THINK"
 OLLAMA_NUM_CTX_ENV_VAR = "FALLACY_AUDITOR_OLLAMA_NUM_CTX"
 DEFAULT_OLLAMA_NUM_CTX = 8192
+OLLAMA_SEED = 7  # fixed: temperature 0 is not sufficient for reproducibility
 # Conservative sizing for the truncation guard: ~3 chars/token overestimates
 # the token count for English, which is the safe direction here.
 _CHARS_PER_TOKEN = 3
@@ -152,7 +153,14 @@ class OllamaClient:
             ],
             "format": output_schema,
             "stream": False,
-            "options": {"temperature": 0, "num_ctx": self._num_ctx},
+            # temperature 0 alone does NOT make Ollama deterministic — the
+            # sampler still needs a fixed seed. Without it the eval's
+            # precision/recall moved between runs on identical inputs.
+            "options": {
+                "temperature": 0,
+                "seed": OLLAMA_SEED,
+                "num_ctx": self._num_ctx,
+            },
         }
         if self._model_supports_thinking():
             payload["think"] = self._think

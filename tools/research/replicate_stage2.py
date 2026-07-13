@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pandas as pd
 
-CACHE = Path("data_cache")
+# Pinned, hashed price snapshot at the repo root (see data_cache/MANIFEST.md).
+# Resolved absolutely so results do not depend on the working directory.
+CACHE = Path(__file__).resolve().parents[2] / "data_cache"
 R1 = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "BHARTIARTL",
       "ITC", "LT", "HINDUNILVR", "BAJFINANCE", "MARUTI", "SUNPHARMA", "TITAN",
       "ULTRACEMCO", "AXISBANK", "KOTAKBANK", "TATASTEEL", "ADANIGREEN"]
@@ -30,11 +32,20 @@ START = 1_000_000.0
 
 
 def weekly(name: str) -> pd.DataFrame | None:
-    f = CACHE / f"{name}.csv"
-    if not f.exists():
+    pq, csv = CACHE / f"{name}.parquet", CACHE / f"{name}.csv"
+    if pq.exists():
+        d = pd.read_parquet(pq)
+    elif csv.exists():
+        d = pd.read_csv(csv, index_col=0, parse_dates=True)
+    else:
         return None
-    d = pd.read_csv(f, index_col=0, parse_dates=True).dropna(subset=["Close"])
+    d = d.dropna(subset=["Close"])
     w = d["Close"].resample("W-FRI").last().dropna().to_frame("c")
+    # Completed weeks only (backported from tools/stage2_scan.py:84). W-FRI
+    # labels each week by its Friday, so a label in the future means the bar
+    # is still forming. Including it lets the backtest trade a week that has
+    # not closed — the same repainting the live scanner already refuses.
+    w = w[w.index <= pd.Timestamp.now()]
     if len(w) < 60:
         return None
     w["sma30"] = w["c"].rolling(30).mean()
