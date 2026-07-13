@@ -1,491 +1,339 @@
-# Stage-2 Backtest — Read-Only Recon
+# Stage-2 Backtest — Recon (post-correction)
 
-*Factual inventory produced by reading the committed source only. Nothing was
-run, modified, or fetched. Every claim cites file + line. "NOT IN REPO" is
-used literally, not as shorthand for "probably somewhere."*
+*Original recon: 2026-07-09, read-only, on `edfdc3e`.
+Correction pass applied and re-verified: **2026-07-14**, on `638b422`.*
 
-Repo: `aryangorde8/TRADINGVIEW_INDICATOR` @ `edfdc3e`. Working tree clean.
-Recon date: 2026-07-09.
+Repo: `aryangorde8/TRADINGVIEW_INDICATOR`. Every claim cites file + line
+against the **current** tree. "NOT IN REPO" is used literally.
+
+**How to read this document.** Each finding carries a status:
+
+| | |
+|---|---|
+| ✅ **FIXED** | the defect is gone; the fix is committed and cited |
+| 📌 **DISCLOSED** | not fixable without changing the strategy or buying data; now stated plainly wherever the numbers appear |
+| ❌ **OPEN** | still broken, still live, deliberately not papered over |
+
+---
+
+## 0. THE HEADLINE — what the correction pass actually established
+
+**Every rupee-denominated statistic from the pooled backtests is WITHDRAWN.**
+`tools/research/replicate_stage2.py:73` resets `equity = START` **inside the
+per-name loop**, so each of the 39 names compounds an independent ₹10,00,000
+account. Pooling the resulting `Profit INR` column mixes trades taken at wildly
+different equity levels — a name that compounded 50× emits rupee P&Ls two orders
+of magnitude larger than an early trade elsewhere. Pooled PF, expectancy,
+bootstrap CI and drawdown **in rupees are size-weighted and are not per-trade
+edge measures.**
+
+❌ **OPEN — the root cause is still in the code.** The per-name equity reset was
+*not* removed (removing it changes the simulation, which this pass was forbidden
+from doing). The `Profit INR` column in the committed pooled CSVs therefore
+remains size-weighted and **must not be used**. The correction is a
+*measurement* workaround, not a simulator fix: `tools/research/percent_audit.py`
+recomputes everything in percentage space from the committed Entry/Exit prices,
+which is size-invariant.
+
+### Recomputed in percent space (the figures that replace the rupee ones)
+
+`r = Exit·(1 − 0.0025) / (Entry·(1 + 0.0025)) − 1`
+Full output: `results/backtests/stage2_percent_audit.txt`
+
+| | U1 (383 trades) | U2 (355 trades) |
+|---|---|---|
+| PF — **rupee (withdrawn)** | 3.53 | 3.77 |
+| **PF — percent (correct)** | **6.43** | **5.12** |
+| PF excl. top-3 — rupee | 2.60 | **1.57** |
+| **PF excl. top-3 — percent** | **4.67** | **4.01** |
+| top-3 share of gross gain — rupee | — | **58.3%** |
+| **top-3 share — percent** | **27.4%** | **21.8%** |
+| bootstrap 95% CI (percent, seed 7) | 4.28 – 9.66 | 3.51 – 7.55 |
+| PF first half → second half (percent) | 7.70 → 4.87 (**−37%**) | 6.30 → 3.55 (**−44%**) |
+| median return per trade | **+0.3%** | **−1.0%** |
+| mean / stdev per trade | +26.3% / 118.9% | +22.0% / 79.9% |
+| win rate *(size-independent)* | 50.7% | 48.5% |
+| max consecutive losses *(size-independent)* | 14 | 8 |
+| mean hold winners / losers *(size-independent)* | 321d / 86d | 317d / 97d |
+
+**Three conclusions changed:**
+
+1. **The "fragile edge" alarm was largely an artifact of the bug it was
+   measuring.** U2's top-3 trades are **21.8%** of gross gain in percent space,
+   not 58.3%; PF falls 5.12 → 4.01 (−22%), not 3.77 → 1.57 (−58%). Those trades
+   looked enormous because they occurred *late in a compounded account*, not
+   because their returns were extreme.
+2. **The published PF understated the size-invariant PF** (3.53/3.77 → 6.43/5.12).
+   Neither number is tradeable; only the percent one is interpretable per-trade.
+3. **Time decay is real and survives the correction** (−37% / −44% across
+   halves). It is the only fragility signal that is *not* an artifact.
+
+And one characterisation that was never visible before: **the median trade is
+≈ 0%** (U1 +0.3%, U2 −1.0%). Half of all trades do essentially nothing; the
+entire expectancy sits in the right tail (p90 ≈ +75-80%, max +934% to +1865%).
 
 ---
 
 ## 1. ARTIFACT INVENTORY
 
-| # | Artifact | Status |
-|---|---|---|
-| a | Per-trade log | **PARTIAL** — see below |
-| b | Equity curve / NAV series | **NOT IN REPO** |
-| c | Pinned price snapshot | **NOT IN REPO** — fetched live |
-| d | 44-example gold set with labels | **IN REPO** |
-| e | Per-example model outputs | **IN REPO** |
-| f | Config / parameter file | **NOT IN REPO** |
+| # | Artifact | Then (2026-07-09) | Now |
+|---|---|---|---|
+| a | Per-trade log | PARTIAL | ✅ **IN REPO** — `results/backtests/stage2_universe{1,2}_*_pooled.csv` (383 / 355 rows), regenerated from pinned data |
+| b | Equity curve / NAV series | **NOT IN REPO** | ✅ **IN REPO** — `results/backtests/stage2_portfolio_equity.csv` (date, nav; **1,593 weekly rows**), written at `stage2_portfolio.py:140` |
+| c | Pinned price snapshot | **NOT IN REPO** | ✅ **IN REPO** — `data_cache/*.parquet` (**39 series**, 12.9 MB) + `data_cache/MANIFEST.md` (fetch date + SHA256 each) |
+| d | 44-example gold set | IN REPO | unchanged — 44 examples, 38 labelled spans, 10 clean |
+| e | Per-example model outputs | IN REPO | unchanged — `fallacy-auditor/results/eval_report_snapshot.json` |
+| f | Config / parameter file | **NOT IN REPO** | ❌ **OPEN** — parameters remain module-level constants (`replicate_stage2.py:22-31`, `stage2_portfolio.py:41-58`) and Pine `input.int`. No single config file. |
 
-**a. Per-trade log** — `results/backtests/stage2_universe1_pooled.csv` (tracked,
-**383 rows**) and `results/backtests/stage2_universe2_oos_pooled.csv` (tracked,
-**354 rows**).
-
-Columns (both): `Entry Date, Exit Date, Days Held, Entry, Exit, Profit INR` —
-written at `tools/research/replicate_stage2.py:75-80`.
-
-**Missing columns: symbol, size/qty, initial stop.** Symbol is dropped at
-pooling (`replicate_stage2.py:103`); qty and stop are never recorded.
-
-Date ranges:
-- U1: entry `1997-01-03` → `2026-02-13`; exit `1997-03-14` → `2026-06-26`
-- U2: entry `1997-01-03` → `2026-03-13`; exit `1997-08-29` → `2026-07-10`
-
-Per-name trade CSVs are written to `stage2_r1/{name}.csv` / `stage2_oos/{name}.csv`
-(`replicate_stage2.py:92`) — **NOT IN REPO** (absent from `git ls-files`).
-
-The **portfolio** simulation (`tools/research/stage2_portfolio.py`) produces **no
-per-trade log at all** — only an integer counter (`:53`, `:67`) and printed
-summaries (`:103-107`).
-
-**b. Equity curve** — `stage2_portfolio.py:92` builds `eq` in memory; never
-written to disk. Only aggregate lines are printed. **NOT IN REPO.**
-
-**c. Price data** — `data_cache/` is gitignored (`.gitignore:9`). Fetched live:
-
-```python
-# tools/research/portfolio_sim.py:55-57
-df = yf.download(f"{name}.NS", period="max", interval="1d",
-                 auto_adjust=True, progress=False,
-                 multi_level_index=False)
-```
-
-**NOT IN REPO.**
-
-**d. Gold set** — `fallacy-auditor/data/labeled_examples.jsonl` (tracked).
-**44 lines.** 38 labeled spans; **10 examples carry zero labels** (negatives).
-Per-class: overfitting 9, unfalsifiable 8, survivorship_bias 7,
-lookahead_bias 7, base_rate_neglect 7.
-
-**e. Per-example outputs** — `fallacy-auditor/results/eval_report_snapshot.json`
-(tracked), key `rows`: 44 entries of shape
-`{"id", "gold", "raw", "verified", "verifier_rejected"}`.
-
-**f. Config file** — none. Parameters are module-level constants
-(`stage2_portfolio.py:19-33`, `replicate_stage2.py:19-29`) and Pine `input.int`
-(`src/stock_stage2_trend_weekly.pine:62-64`). **NOT IN REPO.**
+📌 Still missing from the per-trade log: **symbol, qty, initial stop**. Symbol is
+dropped at pooling; qty is not recorded; **no stop exists to record** (§3b).
 
 ---
 
-## 2. DEFINITIONS
+## 2. DEFINITIONS AND THE 25.3% / ₹96.4cr RECONCILIATION
 
-**a. CAGR** — `tools/research/stage2_portfolio.py:93-97`:
+✅ **FIXED — and the original hypothesis was wrong.** The recon suspected the
+CAGR and the terminal NAV "came from different runs on drifting auto_adjust
+data." They did not. **They always reconciled.** The period is **30.5 years**,
+not the ~29 the script claimed:
 
-```python
-yrs = (eq.index[-1] - eq.index[0]).days / 365.25
-cagr = (eq.iloc[-1] / eq.iloc[0]) ** (1 / yrs) - 1
-mod = eq[eq.index >= MODERN]
-myrs = (mod.index[-1] - mod.index[0]).days / 365.25
-mcagr = (mod.iloc[-1] / mod.iloc[0]) ** (1 / myrs) - 1
+```
+period: 1996-01-05 -> 2026-07-10  (30.5 years)
+start NAV: 1,000,000   end NAV: 964,313,477  (964.3x, 96.4 cr)
+FULL PERIOD : CAGR 25.3%   maxDD 38.3%
 ```
 
-Denominator is **calendar years elapsed** (first to last weekly bar), not years
-invested.
+964.3× over 30.5 years **is** 25.3%. The `"FULL ~29y"` in the old print
+statement was a **hardcoded string literal**, not a computed duration — the only
+defect was the label. `stage2_portfolio.py:135-170` now prints the exact start
+and end dates and both NAVs, so the CAGR reconciles by construction.
 
-Starting capital: `START = 1_000_000.0` (`:22`). `eq.iloc[0]` equals START
-because `mtm` is computed *before* entries each week (`:69-73` precede `:74-89`),
-so week 1 records pre-entry cash.
-Ending capital: `eq.iloc[-1]` — snapshot reports **96.4 cr**.
-Modern cutoff: `MODERN = pd.Timestamp("2013-01-01")` (`:23`).
+(The curve starts in 1996, well before the first trade, because week-1 NAV is
+recorded pre-entry — so the denominator includes warm-up years. Stated, not
+silently corrected.)
 
-**Exact start and end dates are NOT PRINTED** by the script and appear nowhere in
-the committed snapshot — only `"FULL ~29y"`. **NOT IN REPO.**
+### Partial year and one-year dependence — ✅ FIXED (now reported separately)
 
-**b. Max drawdown** — `stage2_portfolio.py:98-99`:
+| | |
+|---|---|
+| Modern (2013+) — **includes partial 2026** | 23.9%, maxDD 23.6% |
+| **Complete years only, 2013-2025 (13 yrs)** | **26.6%** |
+| **… excluding 2020 (12 yrs)** | **19.7%** |
+| **2020 alone contributes** | **+6.9pp** (2020 returned **+147%**) |
+| Partial 2026 (to 2026-07-10) | −14.4% — **not comparable to complete years** |
 
-```python
-dd = ((eq.cummax() - eq) / eq.cummax()).max()
-mdd = ((mod.cummax() - mod) / mod.cummax()).max()
-```
+Any forward expectation should be set from the **ex-2020** figure.
 
-Computed on `eq` = **weekly mark-to-market NAV including open positions**
-(`mtm`, `:69-73`).
-
-Separately, the auditor's `max drawdown: 28417983.56` in
-`results/backtests/stage2_universe1_audit.txt` is a **different quantity**: a
-rupee amount on the **closed-trade cumulative** curve
-(`fallacy-auditor/src/fallacy_auditor/profit.py:127-134`) — not a percentage and
-not mark-to-market.
-
-**c. Yearly returns** — `stage2_portfolio.py:100-101`:
-
-```python
-yearly = eq.resample("YE").last().pct_change().dropna()
-myearly = yearly[yearly.index >= MODERN]
-```
-
-**Calendar-year change in mark-to-market NAV.** Not a sum of trades closed that
-year.
-
-**d. Last bar / partial year** — Max exit label in the committed U2 pooled CSV is
-**`2026-07-10`**. `replicate_stage2.py:37` resamples `.resample("W-FRI").last()`
-**with no completed-week filter**, so the final bin is the *in-progress* week
-labelled with its future Friday. Contrast `tools/stage2_scan.py:84`, which *does*
-filter to completed weeks (commit `9e443c5`, "scanner judges completed weekly
-bars only"). The research scripts do not carry that fix.
-
-**2026 is a partial year.** The snapshot's `2026:-14%` is a partial-year figure.
+**Max drawdown** remains two different quantities and both are labelled as such:
+`stage2_portfolio.py` computes a **% drawdown on weekly mark-to-market NAV
+including open positions**; `profit.py` reports a **rupee drawdown on the
+closed-trade cumulative curve** (and, per §0, that rupee figure is withdrawn).
 
 ---
 
-## 3. EXPECTANCY
+## 3. EXPECTANCY, STOPS, SIZING
 
-**a.** `fallacy-auditor/src/fallacy_auditor/profit.py:219`:
+**a. Expectancy** — `profit.py` still reports the arithmetic mean of whatever
+P&L column it is handed. On the pooled CSVs that column is rupees, so **the
+rupee expectancy is withdrawn** (§0). The size-invariant replacements are mean
+percent return **+26.3% (U1) / +22.0% (U2)**, against a **median of ≈0%**.
 
-```python
-expectancy=sum(profits) / n,
-```
-
-Yes — **simple arithmetic mean of the rupee `Profit INR` column** (U1:
-1,588,028.37).
-
-Material caveat from the source: `replicate_stage2.py:61-62` resets
-`equity = START` **inside the per-name loop** — every one of the 19/20 names
-trades its own fresh ₹10,00,000 account and compounds independently. The pooled
-file therefore mixes trades taken at wildly different equity levels; a name that
-compounded 50× produces rupee P&Ls two orders of magnitude larger than an early
-trade. **Mean rupee P&L is not a per-trade edge measure on this file.**
-
-**b. Initial stop at entry: NONE EXISTS.** The only exit is a trend break:
-
-```python
-# tools/research/replicate_stage2.py:70
-if row.c < row.sma30:
-```
-
-```python
-# tools/research/stage2_portfolio.py:64
-if row.c < row.sma:
-```
-
-`grep -n "stop"` over `src/stock_stage2_trend_weekly.pine` returns **no matches**.
-There is no stop rule to quote.
+**b. Initial stop: NONE EXISTS.** 📌 **DISCLOSED.** The only exit is a trend
+break (`replicate_stage2.py:70`-equivalent; `stage2_portfolio.py:99`). `grep -n
+"stop"` over `src/stock_stage2_trend_weekly.pine` still returns **no matches**.
+This is a property of the strategy, not a defect — but it means:
 
 **c. Initial risk (entry − stop) × shares: NOT RECORDED and NOT RECOMPUTABLE.**
-No stop exists, and the pooled CSV has no `qty` column — share count is not
-recoverable from committed data either.
+There is no stop, and no `qty` column.
 
-**d. Position sizing** — two different rules:
-
-```python
-# replicate_stage2.py:84  (per-name: all-in on full name equity)
-q = int(equity / (row.c * (1 + COST)))
-```
-
-```python
-# stage2_portfolio.py:84-85  (portfolio: equity/10, cash-capped)
-alloc = min(mtm / MAX_SLOTS, cash)
-qty = int(alloc / (row.c * (1 + COST)))
-```
-
-Neither is risk-based — there is no stop to size against.
+**d. Position sizing is NOT risk-based.** 📌 **DISCLOSED.** Two rules coexist:
+all-in on per-name equity (`replicate_stage2.py`), and `mtm / MAX_SLOTS`
+cash-capped (`stage2_portfolio.py:120`). Neither sizes against a stop, because
+there is no stop.
 
 ---
 
 ## 4. THE 10-SLOT MECHANIC
 
-**a. Ranking** — `tools/research/stage2_portfolio.py:75-83`:
+**a. Ranking is ALPHABETICAL.** ❌ **OPEN — flagged as a known risk, not fixed.**
+`stage2_portfolio.py:111` iterates `for n in NAMES:` where `NAMES = sorted([...])`
+(`:51`). When more than 10 names signal in the same week, slots go to the
+**alphabetically first tickers**. There is no strength, momentum, or liquidity
+ranking. This is an **arbitrary, untested choice**, and the reported portfolio
+CAGR is conditional on it. It is now stated in `results/README.md` §3 and in the
+script docstring; **it has not been tested against alternatives** (doing so would
+be a new experiment, out of scope for a correction pass).
 
-```python
-    for n in NAMES:
-        if len(pos) >= MAX_SLOTS:
-            break
-        if n in pos or n not in data or wk not in data[n].index:
-            continue
-        row = data[n].loc[wk]
-        if pd.isna(row.sma) or pd.isna(row.anchor) or not row.rising:
-            continue
-        if row.c > row.anchor and row.c > row.sma:
-```
+**b. Lookahead: NONE.** ✅ Confirmed again on the current tree. The anchor is
+lagged (`w["c"].shift(1).rolling(52).max()`), `rising` compares trailing SMAs,
+and the alphabetical rank uses no price data.
 
-`NAMES = sorted([...])` (`:25`). The winner is the **alphabetically first
-ticker**. There is no strength, momentum, or liquidity ranking.
+**c. Same-bar-close execution.** 📌 **DISCLOSED — this is the material
+limitation, and it is not lookahead.** Fills are at `row.c`, the *same* weekly
+close that generates the signal, and sizing uses `mtm` marked at that close. No
+future bar is read, but **you cannot transact at a price you only observe once
+the bar has closed.** Live, you fill at the **next open**. Every return in this
+repo is optimistic by one gap, and the gap is not modelled. Now stated wherever
+the figures appear.
 
-**b. Lookahead check — no future-bar data is used anywhere.** Specifically:
+**d. Skipped signals are DROPPED, not queued** — unchanged, and now stated.
 
-- Anchor is correctly lagged: `w["anchor"] = w["c"].shift(1).rolling(52).max()`
-  (`:45`) — the shift removes the current bar from its own 52-week high.
-- `w["rising"] = w["sma"] > w["sma"].shift(4)` (`:46`) — both terms trailing.
-- The alphabetical rank uses **no price data at all**.
-
-**What is present is same-bar-close execution, not lookahead:** the fill price is
-`row.c` (`:83-88`), the very weekly close that generates the signal, and sizing
-uses `mtm` (`:84`) which was marked at that same close (`:72`). This assumes you
-transact *at* a close you only observe *at* the close. It uses no future
-information, but it is not executable as written.
-
-**c. Skipped signals are DROPPED, not queued.** `:76-77` breaks the entry loop
-when slots are full; no queue or pending-signal structure exists in the file. A
-skipped name re-enters only if its entry condition re-fires on a later week
-(conditions are re-evaluated fresh each iteration).
-
-**d. Average open positions / % weeks fully invested / % time in cash: NOT IN
-REPO.** `stage2_portfolio.py` tracks `pos` but records none of these statistics —
-only `trades` (`:53`, `:67`) and `curve` (`:90`). The committed snapshot prints
-none of them.
-(The `avg concurrent=7.1` line printed by `portfolio_sim.py` belongs to a
-**different strategy** — ribbon + 52wk breakout, `portfolio_sim.py:1-4` — not
-Stage-2.)
+**e. Avg open positions / % time in cash: still NOT IN REPO.** ❌ **OPEN.** The
+committed equity curve (`b` above) now makes these computable by a reader, but
+the script does not report them.
 
 ---
 
-## 5. FRAGILITY CHECK
+## 5. FRAGILITY CHECK — the auditor failed its own audit
 
-**a.** `fallacy-auditor/src/fallacy_auditor/profit.py:171-209` — the warnings
-block:
+✅ **FIXED.** Every original check was an **absolute floor at PF 1.0**. Nothing
+tested *relative* degradation, so U2 could collapse **3.77 → 1.57** on removing
+3 of 355 trades (0.85% of the sample), decay **15.00 → 1.99** across halves, and
+still print **"no fragility warnings"** — because 1.57 and 1.99 are both above
+1.0. *A number staying above the floor says nothing about how far it fell to get
+there.*
+
+Added (`fallacy-auditor/src/fallacy_auditor/profit.py:44-45`):
 
 ```python
-    warnings: list[str] = []
-    if n < SMALL_SAMPLE:
-        ...
-    if pf is None:
-        ...
-    elif pf < 1.0:
-        warnings.append("profit factor below 1.0 — gross losses exceed gross profits")
-    if pf is not None and pf >= 1.0 and pf_top3 is not None and pf_top3 < 1.0:
-        warnings.append(
-            "fragile edge: removing the top 3 winners drops the profit "
-            "factor below 1.0 — the result is concentrated in a few trades"
-        )
-    if profits and gross_profit > 0 and max(profits) > 0.5 * gross_profit:
-        warnings.append(
-            "a single trade contributes more than half of all gross profit"
-        )
-    if (
-        pf is not None
-        and pf >= 1.0
-        and (
-            (pf_first is not None and pf_first < 1.0)
-            or (pf_second is not None and pf_second < 1.0)
-        )
-    ):
-        ...
-    if ci_low is not None and ci_low < 1.0 <= (pf or 0):
-        ...
+PF_DROP_TOP3_WARN = 0.40  # warn if PF falls >40% when the top 3 are removed
+HALF_DECAY_WARN   = 0.40  # warn if second-half PF < 40% of first-half PF
 ```
 
-Thresholds: sample `n < 30` (`SMALL_SAMPLE`, `:27`); `pf < 1.0`;
-**`pf_excl_top3 < 1.0`**; `max(profits) > 0.5 × gross_profit`;
-`pf_first_half < 1.0` **or** `pf_second_half < 1.0`; `ci_low < 1.0`.
+fired at `:212` ("concentrated edge") and `:243` ("decaying edge"). The
+regression is pinned by a test that feeds **the actual U2 pooled CSV** and
+asserts both warnings fire (`fallacy-auditor/tests/test_profit.py`), plus two
+synthetic cases proving they fire *without* crossing the old 1.0 floor. 82 tests
+pass.
 
-**b. Why Universe 2 emitted "no fragility warnings" despite PF 3.78 → 1.57 on
-removing 3 of 354 trades.**
+The 0.40 values are a **judgment call, not a derived constant** — flags for
+review, not verdicts. Documented as such in `fallacy-auditor/README.md`.
 
-Measured from the committed `stage2_universe2_oos_pooled.csv`:
-
-| Test (`profit.py` line) | Threshold | U2 actual | Fired? |
-|---|---|---|---|
-| Luck concentration (`:184`) | `pf_excl_top3 < 1.0` | **1.57** | **No** |
-| Single-trade dominance (`:189`) | `max > 50% of gross profit` | top-1 = **40.0%** | **No** |
-| Time stability (`:193-204`) | either half `< 1.0` | 15.00 / **1.99** | **No** |
-| Bootstrap CI (`:205`) | `ci_low < 1.0` | **1.17** | No |
-| Small sample (`:172`) | `n < 30` | 354 | No |
-
-**Every threshold is an absolute floor at 1.0. None tests relative degradation.**
-A profit factor that collapses 58% (3.78 → 1.57), or a second half that decays
-7.5× (15.00 → 1.99), passes silently — both land above the floor.
-
-Underlying concentration (computed from the committed CSV): top-1 trade
-**₹40.78 cr**, top-2 **₹9.61 cr**, top-3 **₹9.06 cr**; gross profit **₹102.0 cr**.
-**The top 3 of 354 trades (0.85%) supply 58.3% of all gross profit; the single
-largest supplies 40.0%** — 10 percentage points under the dominance trigger.
+> **The honest catch, stated because it cuts against the fix.** The U2 *rupee*
+> fragility these new checks now catch **is itself the §0 artifact**. In percent
+> space U2 triggers **neither** warning (−22% top-3 drop, 56% half-retention —
+> both inside the thresholds). So the checks are correctly signalling "this file
+> cannot be trusted", but for a different reason than they name. The fix is still
+> right in general — a P&L auditor must catch relative collapse — and
+> `fallacy-auditor/README.md` now warns that currency P&L from a compounding
+> backtest is size-weighted and its apparent concentration may be illusory.
 
 ---
 
 ## 6. PARAMETERS AND PROVENANCE
 
-**a. Every tunable parameter with its committed value:**
+📌 **DISCLOSED — unchanged and unfixable retroactively.**
 
-| Parameter | Value | Location |
-|---|---|---|
-| New-high lookback | 52 weeks | `replicate_stage2.py:41`, `stage2_portfolio.py:45`, Pine `:62` |
-| Trend SMA | 30 weeks | `replicate_stage2.py:40`, `stage2_portfolio.py:44`, Pine `:63` |
-| SMA-rising lookback | 4 weeks | `replicate_stage2.py:42`, `stage2_portfolio.py:46`, Pine `:64` |
-| Bar resample | `W-FRI` | `replicate_stage2.py:37`, `stage2_portfolio.py:41` |
-| Min history | 60 weeks | `replicate_stage2.py:38`, `stage2_portfolio.py:42` |
-| Cost/side | 0.0025 | `replicate_stage2.py:28`, `stage2_portfolio.py:21` |
-| Start capital | 1,000,000 | `replicate_stage2.py:29`, `stage2_portfolio.py:22` |
-| Max slots | 10 | `stage2_portfolio.py:20` |
-| Modern-era cutoff | 2013-01-01 | `stage2_portfolio.py:23` |
-| Bootstrap seed / rounds | 7 / 1000 | `profit.py:28-29` |
-| Small-sample threshold | 30 | `profit.py:27` |
+Values (52 / 30 / 4 weeks; `W-FRI`; 0.25%/side; 10 slots; 2013 cutoff; bootstrap
+seed 7) are unchanged and hardcoded. **No parameter was tuned in this pass.**
 
-**b. Parameter-change commits, from `git log`:**
-
-```
-092fd2b 2026-07-07 audit: recon report + fixes (cost reconcile, committed results, dead code, docstring)
-2259bf4 2026-07-07 feat: fallacy-auditor v0.4 + stage-2 trend system + research replications
-```
-
-(`git log -- tools/research/replicate_stage2.py tools/research/stage2_portfolio.py src/stock_stage2_trend_weekly.pine`)
-
-**Two commits total, both on 2026-07-07. Zero parameter-change commits. Zero
-re-evaluation cycles are visible in git for the Stage-2 system.**
-
-**c. A priori or tuned? — git evidence, stated precisely.**
-
-The *claims* of pre-registration exist in the source:
-
-```python
-# tools/research/replicate_stage2.py:1-9
-"""Stage-2 weekly trend rider — registered spec (decided before running):
-...
-- BAR:   pooled date-sorted PF >= 1.5 on BOTH universes separately,
-         CI low > 1.0, survives top-3 removal. FAIL => REJECT, no re-tuning.
-```
-
-```pine
-// src/stock_stage2_trend_weekly.pine:39
-// DO NOT   : tune the 52/30/4 lengths — they are the literature-standard,
-```
-
-**Git cannot verify either claim.** The spec, the code, and the results all
-landed in a **single commit** (`2259bf4`). There is no commit sequence showing
-the spec existing before the results. The pre-registration is **asserted in a
-docstring, not proven by history**.
-
-**Counter-evidence of a tuning culture in the same repo, on *other* strategies**
-(all pre-dating Stage-2):
-
-```
-22a2287 2026-06-16 fix: rsi dip level 40->50 (and rip 60->50) for trend-pullback
-2fb3a38 2026-06-16 test: rrTarget 1.5->2.5 (fixed-target config) + firstTgtR 1.5->2.0 ... payoff test on same entry
-0a1642c 2026-06-17 feat: 3tp variant — set TPs to 50%@1.8R / 30%@2.2R / 20%@2.5R
-c6eaad3 2026-06-18 feat: 2r arm-stop -> -0.5R at 1R (configurable armToR), book@2R
-```
-
-These are the ribbon/swing strategies (`src/stock_swing_*.pine`), **not**
-Stage-2. The distinction is real and should be stated as such: Stage-2's
-parameters show no tuning in git; the repo's other strategies show extensive
-iterative tuning against results.
-
-**d. Fitted on one period, validated on a strictly later one? — NO.**
-
-U1 and U2 are **different tickers over the same calendar span** (both pooled
-files begin `1997-01-03` and run into 2026). This is a **cross-sectional** split,
-not a temporal one. There is no walk-forward, no train/test time boundary, and no
-out-of-time holdout anywhere in the Stage-2 code. The `MODERN = 2013-01-01`
-cutoff (`stage2_portfolio.py:23`) is a *reporting* segmentation applied after the
-fact, not a validation split.
+**a priori or tuned? Git still cannot prove it.** The pre-registration claim
+lives in a docstring (`replicate_stage2.py:1-9`) and a Pine comment, and the
+spec, code and results all landed in a **single commit** (`2259bf4`). There is no
+commit sequence showing the spec predating the results. Stage-2's parameters show
+**no tuning commits**; the repo's *other* strategies (`stock_swing_*`) show
+extensive iterative tuning. That distinction is real and remains the honest
+statement — **the pre-registration is asserted, not proven by history.**
 
 ---
 
 ## 7. UNIVERSES
 
-**a.** `tools/research/replicate_stage2.py:20-26`:
+📌 **DISCLOSED — both defects remain, both are now stated wherever numbers appear.**
 
-**U1 (`R1`, 19 names):** RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN,
-BHARTIARTL, ITC, LT, HINDUNILVR, BAJFINANCE, MARUTI, SUNPHARMA, TITAN,
-ULTRACEMCO, AXISBANK, KOTAKBANK, TATASTEEL, ADANIGREEN
+**a. There is NO temporal out-of-sample test. Anywhere.** U1 (19 names) and U2
+(20 names) are **disjoint tickers over the same 1997-2026 span**. That is a
+**cross-sectional** split: it controls for parameter reuse across names, and
+**nothing else**. It does not test a later regime. There is no walk-forward, no
+train/test boundary, no holdout period. The `2013+` cutoff is a *reporting*
+segmentation applied after the fact, not a validation split. Calling U2
+"out-of-sample" (as the filename `stage2_universe2_oos_pooled.csv` still does) is
+**misleading and is now contradicted in the README** — the filename is retained
+only to avoid breaking committed references.
 
-**U2 (`OOS`, 20 names):** WIPRO, HCLTECH, TECHM, ASIANPAINT, NESTLEIND,
-BAJAJFINSV, ADANIPORTS, POWERGRID, NTPC, ONGC, COALINDIA, JSWSTEEL, HINDALCO,
-DRREDDY, CIPLA, EICHERMOT, HEROMOTOCO, BRITANNIA, DABUR, VEDL
-
-**Disjoint: yes** (19 + 20 = 39 = the `NAMES` list in `stage2_portfolio.py:25-33`).
-
-**Same date range: pooled, yes** (both 1997 → 2026). **Per-name, no** — several
-U2 constituents listed far later than 1997 (e.g. POWERGRID, COALINDIA,
-ADANIPORTS), and U1 contains ADANIGREEN (listed 2018). Per-name effective ranges
-are not recorded in any committed artifact.
-
-**b. Provenance of the lists: hardcoded literals** (`replicate_stage2.py:20-26`).
-**NOT IN REPO:** any script, note, or index file documenting how these 39 were
-selected, or any point-in-time membership source. They are large-cap NSE names
-that exist today — **membership as of today, survivorship-biased by
-construction.** (`tools/watchlist_*.txt` files exist but drive the scanner, not
-the backtest, and are themselves current-membership lists.)
+**b. Survivorship-biased by construction.** The 39 names are hardcoded
+(`replicate_stage2.py:22-28`) and were selected because they **exist today**.
+Delisted and failed companies are absent. Trend systems are the most inflated by
+this bias. Free data offers no point-in-time membership feed, so this is not
+fixable here — only disclosable.
 
 ---
 
 ## 8. COSTS AND FILLS
 
-**a.** `COST = 0.0025` (`replicate_stage2.py:28`, `stage2_portfolio.py:21`).
-Applied on **both** sides:
+✅ Costs verified again on the current tree: `COST = 0.0025`
+(`replicate_stage2.py:30`), applied on **both** sides — `proceeds = row.c * qty *
+(1 - COST)` (`:82`) and `cost_basis = entry_px * qty * (1 + COST)` (`:84`).
 
-```python
-# replicate_stage2.py:71 (exit)   proceeds = row.c * qty * (1 - COST)
-# replicate_stage2.py:73 (entry)  cost_basis = entry_px * qty * (1 + COST)
-# stage2_portfolio.py:65 (exit)   cash += row.c * pos[n]["qty"] * (1 - COST)
-# stage2_portfolio.py:88 (entry)  cash -= row.c * qty * (1 + COST)
-```
-
-**b. Fill price: the signal bar's own weekly close** (`row.c` at
-`replicate_stage2.py:83-88`; `stage2_portfolio.py:83-88`). Not next-bar open, not
-next-bar close.
-
-**c. Slippage / gap model: NONE** beyond the flat 0.25%. No slippage term, no
-gap-through handling, no liquidity or volume constraint, no partial fills, no
-stop-vs-gap ambiguity. (`portfolio_sim.py:10-11` mentions "gap-at-open,
-stop-first ambiguity" — that docstring belongs to the **ribbon/52wk** strategy,
-not Stage-2.)
+📌 **Fills: signal bar's own weekly close** (§4c). Not next-bar open.
+📌 **Slippage / gap model: NONE** beyond the flat 0.25%. No partial fills, no
+volume constraint, no gap-through handling.
 
 ---
 
-## 9. FALLACY-AUDITOR EVAL
+## 9. FALLACY-AUDITOR EVAL — now with confidence intervals
 
-**a. Confusion matrices** (`fallacy-auditor/results/eval_report_snapshot.json`,
-run `2026-07-07`, engine `ollama`, 44 examples):
+✅ **FIXED (reporting).** Wilson 95% intervals, n=44 (38 labelled spans):
 
-| Pipeline | tp | fp | fn | tn | Precision | Recall |
-|---|---|---|---|---|---|---|
-| Raw (single-pass) | 29 | 13 | 9 | **not reported** | 0.690 | 0.763 |
-| Verified (two-pass) | 27 | 4 | 11 | **not reported** | 0.871 | 0.711 |
+| Pipeline | Precision | Recall |
+|---|---|---|
+| Single-pass | 0.690 (29/42) **[0.54, 0.81]** | 0.763 (29/38) [0.61, 0.87] |
+| Two-pass (verifier) | 0.871 (27/31) **[0.71, 0.95]** | 0.711 (27/38) [0.55, 0.83] |
 
-**TN is NOT IN REPO** — the task is span/label detection, not binary
-classification, so true negatives are undefined in the report schema
-(`raw.micro` / `verified.micro` carry only `precision, recall, tp, fp, fn`).
+**The precision intervals OVERLAP on [0.71, 0.81].** The verifier's precision
+gain is **directional, not statistically established** at this sample size. It is
+now reported as an observation, never as a proven improvement. Mechanically the
+verifier removed **9 false positives and 2 true positives** (tp 29→27, fp 13→4,
+fn 9→11).
 
-The two-pass verifier removed **9 false positives and 2 true positives**
-(tp 29→27, fn 9→11). That is the mechanism behind the precision gain and the
-recall loss.
+✅ **Seed pinned.** `llm.py:52` `OLLAMA_SEED = 7`, sent at `:161`. Temperature 0
+alone does **not** make Ollama deterministic. **The committed snapshot predates
+this fix** and says so.
 
-**b. Total gold positives: 38 labeled spans across 44 examples** (10 examples
-have zero labels). Confirmed internally: `tp + fn = 38` in both pipelines
-(29+9, 27+11).
-
-**c. Temperature 0: YES.** `fallacy-auditor/src/fallacy_auditor/llm.py:155`:
-
-```python
-"options": {"temperature": 0, "num_ctx": self._num_ctx},
-```
-
-**Seed: NOT PINNED — NOT IN REPO.** No `seed` key is sent to Ollama in the
-options dict. (Contrast `profit.py:29`,
-`BOOTSTRAP_SEED = 7  # fixed: the report must be reproducible` — the bootstrap
-*is* seeded.)
+❌ **OPEN:** the `qwen2.5:7b` Ollama tag can be re-pulled with different weights;
+`FALLACY_AUDITOR_EVAL_WORKERS` alters scheduling. TN remains undefined (span
+detection, not binary classification).
 
 ---
 
 ## 10. REPRODUCIBILITY
 
-**A fresh clone cannot reproduce the README backtest numbers exactly.** Sources
-of non-determinism, in order of severity:
+✅ **A fresh clone now reproduces every backtest figure with no network.**
 
-1. **No pinned price data.** `data_cache/` is gitignored (`.gitignore:9`).
-   `portfolio_sim.py:55` re-fetches from Yahoo with `period="max"`, so a later
-   run sees additional bars. `auto_adjust=True` means splits/dividends
-   **restate the entire historical series** — past prices change, not just
-   recent ones.
-2. **The in-progress week is included.** `replicate_stage2.py:37` /
-   `stage2_portfolio.py:41` resample `W-FRI` with **no completed-week filter**
-   (unlike `stage2_scan.py:84`). The final bar differs depending on the weekday
-   you run it.
-3. **2026 is a partial year.** The `2026: -14%` figure moves every week and is
-   not comparable to complete years in the same table.
-4. **LLM eval is not seed-pinned** (`llm.py:155` sends temperature 0 but no
-   seed). Also variable: the `qwen2.5:7b` Ollama tag can be re-pulled with new
-   weights, `num_ctx`, and worker parallelism (`test_eval.py:137`,
-   `FALLACY_AUDITOR_EVAL_WORKERS`).
-5. **Ollama must be running locally with the model pulled** — the eval cannot
-   run at all otherwise.
+| Source of drift (2026-07-09) | Status |
+|---|---|
+| No pinned price data; `period="max"` re-fetch; `auto_adjust` restates history | ✅ **FIXED** — 39 series pinned as parquet + SHA256 manifest; `pin_data.py --verify` detects drift |
+| In-progress week included (`W-FRI`, no completed-week filter) | ✅ **FIXED** — filter backported from `stage2_scan.py:84` to `replicate_stage2.py:48` and `stage2_portfolio.py:74` |
+| 2026 partial year mixed with complete years | ✅ **FIXED** — reported separately; complete-years and ex-2020 CAGR published |
+| Equity curve existed only in memory | ✅ **FIXED** — committed (1,593 rows) |
+| LLM eval not seed-pinned | ✅ **FIXED** going forward (snapshot predates it) |
+| Ollama tag / weights not pinned | ❌ **OPEN** |
 
-**What IS deterministic and reproducible:** every number in
-`results/backtests/*_audit.txt` is reproducible from the committed pooled CSVs,
-because `profit.py` is pure stdlib with a fixed bootstrap seed (`:29`). The
-committed pooled CSVs and the committed eval snapshot are the only fixed records
-in the repo; the CAGR, max-drawdown, and yearly-return figures depend entirely on
-uncommitted, drifting data.
+```bash
+python3 tools/research/pin_data.py --verify     # 39 hashes match
+python3 tools/research/percent_audit.py         # §0 (committed CSVs only, no network)
+python3 tools/research/stage2_portfolio.py      # §2 (equity curve + summary)
+python3 -m fallacy_auditor results/backtests/stage2_universe2_oos_pooled.csv
+cd fallacy-auditor && pytest -q                 # 82 tests
+```
+
+Everything above is offline. The **only** figure still requiring a live
+dependency is the LLM eval (Ollama + `qwen2.5:7b`).
+
+---
+
+## 11. WHAT IS STILL WRONG (the short list)
+
+1. ❌ **The per-name equity reset is still in the simulator**
+   (`replicate_stage2.py:73`). The `Profit INR` column in the committed pooled
+   CSVs is size-weighted and must not be used. Percent space is the workaround,
+   not a fix.
+2. ❌ **Alphabetical slot allocation** is arbitrary and untested; the portfolio
+   CAGR is conditional on it.
+3. ❌ **No temporal out-of-sample test exists** — and the `_oos_` filename
+   actively misleads.
+4. 📌 **Fills are not executable** (signal-bar close); live returns will be worse
+   by the open gap.
+5. 📌 **Survivorship-biased universe**; **no stops**; **sizing not risk-based**.
+6. ❌ **Pre-registration is asserted in docstrings, not provable from git.**
+7. 📌 **The strategy has never traded.** Every number in this repo is a backtest.
