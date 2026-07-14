@@ -10,12 +10,14 @@
 //            30-week SMA (Stage-2 breakout); stay in until the weekly close
 //            falls back below the 30-week SMA (Stage-3/4 transition).
 //            No profit target — the whole edge is letting winners run.
-// TESTED   : replicated in-house (2026-07-05) on 39 NSE large caps,
-//            ~29y weekly data, 0.25%/side, full-equity single position:
-//            - round-1 universe: pooled PF 3.53 (CI 2.11-5.82), 383 trades
-//            - OOS universe:     pooled PF 3.78 (CI 1.17-10.25), 354 trades
-//            - breadth 37/39 names PF>1; no fragility warnings;
-//              survives top-3 removal (2.60 / 1.57)
+// TESTED   : replicated in-house against the pinned data_cache/ snapshot
+//            (committed at results/backtests/), 39 NSE large caps, ~29y
+//            weekly data, 0.25%/side, full-equity single position:
+//            - round-1 universe: pooled PF 3.53 (CI 2.11-5.82), 383 trades,
+//              no fragility warnings
+//            - OOS universe:     pooled PF 3.77 (CI 1.27-9.85), 355 trades;
+//              the fragility auditor FLAGS concentrated + decaying edge
+//            - survives top-3 removal (2.60 / 1.57), above the PF>=1.5 bar
 //            PASSED its pre-registered bar (PF>=1.5 both universes, CI>1,
 //            top-3 survival) — the first candidate in this project to do so.
 // CAVEATS  : (1) full-equity compounding weights recent trades: the

@@ -36,7 +36,7 @@ system**, mechanised:
 
 Measured results (all with 0.25%/side costs, ~29 years of weekly data,
 survivorship-caveated because I test today's index members backwards):
-- 39 NSE large caps, two universes: pooled profit factor 3.53 / 3.78 —
+- 39 NSE large caps, two universes: pooled profit factor 3.53 / 3.77 —
   PASSED its pre-registered bar (PF >= 1.5, CI > 1, survives top-3 removal).
 - Full Nifty 500 (441 names, 5,048 trades): pooled PF 6.29 (upper bound),
   breadth 87% of names profitable.
@@ -67,7 +67,7 @@ dual-edge) but the weekly Stage-2 is the champion.
   discarded — this structurally prevents the auditor from hallucinating
   critiques. It has a two-pass verifier, a Pine Script linter (mechanical
   lookahead/repaint detection), a profit-factor fragility auditor (bootstrap
-  CI, luck-concentration, time-stability), 79 tests, CI, and a 44-example
+  CI, luck-concentration, time-stability), 83 tests, CI, and a 44-example
   hand-labeled eval set (committed two-pass snapshot: precision 0.87 /
   recall 0.71 — `fallacy-auditor/results/eval_report_snapshot.json`).
 - **A trade journal** with automatic profit-factor auditing (live PF vs the

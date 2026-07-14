@@ -37,7 +37,7 @@ I'd check X" is a valid answer and scores higher than a confident guess.
 
 ## B. Backtest methodology (where interviewers smell blood)
 
-8. Universe 2 is labeled "out-of-sample" (PF 3.78). Defend the label —
+8. Universe 2 is labeled "out-of-sample" (PF 3.77). Defend the label —
    both 39-name universes are large-cap NSE *survivors chosen today*. What
    does the R1/OOS split actually control for, and what does it not touch?
 9. Your PF confidence intervals come from bootstrap. Bootstrap over what —
