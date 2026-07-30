@@ -24,11 +24,13 @@ trading *reasoning* for five named fallacies using a local Ollama LLM, whose
 signature feature is a **grounding gate** that discards any model finding not
 quoted verbatim from the input. The engineering (the auditor: grounding gate,
 schema validation, verifier pass, Pine linter, profit-factor fragility
-auditor, 79 tests, CI) is the most defensible part. The trading *performance
-numbers* are produced by real, runnable code but are **not committed as
-artifacts, depend on live Yahoo data that drifts, and use survivorship-biased
-universes** — so they are demonstrations of methodology, not verifiable track
-records.
+auditor, 83 tests, CI) is the most defensible part. The trading *performance
+numbers* are produced by real, runnable code; the headline figures (the
+39-name PFs, the portfolio CAGR, and the eval P/R) are now **committed as
+artifacts in `results/` and reproduce byte-for-byte from a pinned, hashed
+price snapshot in `data_cache/`** (verified). They still **use
+survivorship-biased universes and have no forward/live track record** — so
+they are demonstrations of methodology, not a trading record.
 
 ---
 
@@ -41,20 +43,21 @@ records.
 | fallacy-auditor: grounding gate | **REAL, correctly wired** | `grounding.py:36` substring check; `audit.py:56,63` returns only grounded |
 | fallacy-auditor: Ollama LLM integration | **REAL (needs Ollama running + model pulled)** | `llm.py:134-165` `/api/chat`; default `qwen2.5:7b` `:46` |
 | fallacy-auditor: two-pass verifier | **REAL** | `audit.py:83-87`; `verifier.py` (1:1 reconciliation) |
-| Eval harness (precision/recall) | **REAL, but numbers not committed** | `tests/test_eval.py:132-193`; writes `eval_report.json` which is **gitignored** (`.gitignore:5`) |
+| Eval harness (precision/recall) | **REAL; snapshot committed** | `tests/test_eval.py:132-193`; the live `eval_report.json` is gitignored, but a frozen snapshot is committed at `fallacy-auditor/results/eval_report_snapshot.json` (two-pass P 0.87 / R 0.71) |
 | Hand-labeled eval set | **REAL, committed** | `data/labeled_examples.jsonl` — 44 examples, 38 labels, 10 clean (verified by count) |
-| 79-test suite | **REAL** | `pytest --collect-only` → 79 tests (1 eval test deselected) |
+| 83-test suite | **REAL** | `pytest --collect-only` → 83 tests; `pytest -q` runs 82 (1 eval deselected by default) |
 | Pine linter | **REAL** | `pinelint.py:1-29` rules; regex-based, no deps |
 | Profit-factor fragility auditor | **REAL** | `profit.py:137-151` seeded 1000-round bootstrap CI; `:153` audit_trades |
 | Trade journal | **REAL (empty until you log trades)** | `tools/journal.py:36-40` cost-applied P&L; `journal.csv` gitignored |
 | Greenblatt value screen | **REAL (depends on Yahoo fundamentals quality)** | `tools/value_screen.py:45-69` |
-| Historical replications (PF/CAGR numbers) | **REAL code, results NOT committed, data drifts** | `tools/research/replicate_stage2.py:104-124` cost-applied P&L; universes hardcoded `:20,23` |
+| Historical replications (PF/CAGR numbers) | **REAL code; 39-name results committed & pinned** | `tools/research/replicate_stage2.py:104-124` cost-applied P&L; universes hardcoded `:22-28`; outputs committed in `results/backtests/`, inputs pinned in `data_cache/` (wider Nifty-500 / US runs remain uncommitted) |
 | Paid Claude engines (Fable/Opus) | **SCAFFOLDED** (optional, needs `[anthropic]` extra + credentials) | `llm.py:191-199,208-288` lazy import |
 
 Nothing is SIMULATED/stubbed in a deceptive way. The honest split is
 **REAL-but-requires-a-runtime-dependency** (Ollama for the auditor; internet+
-yfinance for the scanner/replications) and **REAL-but-results-not-committed**
-(all performance numbers).
+yfinance only for *live* scanning — the committed backtests read the pinned
+`data_cache/` offline) and **REAL-but-survivorship-biased-and-not-yet-forward-
+tested** (the performance numbers).
 
 ---
 
@@ -93,22 +96,19 @@ yfinance for the scanner/replications) and **REAL-but-results-not-committed**
 - Free data (yfinance) has no point-in-time delisted-universe feed, so this is
   a genuine, unfixable-with-free-tools limitation — state it, don't hide it.
 
-### 3c. Cost modeling — **VERDICT: CLEAN but INCONSISTENT between the two engines**
+### 3c. Cost modeling — **VERDICT: CLEAN and reconciled**
 - **Python replications apply 0.25%/side** in the actual P&L math:
-  `replicate_stage2.py:105-108` — `proceeds = row.c*qty*(1-COST)`, `cost_basis
-  = entry_px*qty*(1+COST)`, `COST = 0.0025` (`:28`). The reported pooled PFs
+  `replicate_stage2.py:82-84` — `proceeds = row.c*qty*(1-COST)`, `cost_basis
+  = entry_px*qty*(1+COST)`, `COST = 0.0025` (`:30`). The reported pooled PFs
   come from this path. Costs are genuinely in the numbers.
-- **The Pine strategy applies 0.2%/side + 5 ticks slippage**
-  (`stock_stage2_trend_weekly.pine:49-50`: `commission_value = 0.2`,
-  `slippage = 5`). So TradingView's own tester and the Python replication use
-  **different cost assumptions** (0.2% vs 0.25%). Not wrong, but a skeptic will
-  notice the two "backtests" aren't the same experiment. State which number
-  came from which engine.
-- Minor: `replicate_stage2.py` contains a superseded `simulate()` function
-  (`:~40-66`, note the odd `equity += ... + 0  # handled below` at `:60`) that
-  is **not** the path producing the reported numbers — the `run()` function's
-  inline loop (`:100-124`) is. Dead code; harmless to results but worth
-  deleting.
+- **The Pine strategy now also applies 0.25%/side** (`stock_stage2_trend_weekly
+  .pine:52-53`: `commission_value = 0.25`) **plus ~5 ticks slippage** (`:54`) as
+  extra conservatism — so the Pine tester is marginally *stricter* than the
+  Python replication, not a different cost assumption. (Earlier drafts ran the
+  Pine at 0.2%; that split is now closed — see the FIXES banner in §7.)
+- The previously-noted dead `simulate()` function has been removed;
+  `replicate_stage2.py` now contains only `weekly()` and `run()`, and the inline
+  loop in `run()` (`:77-101`) is the sole P&L path.
 
 ### 3d. Parameter provenance — **VERDICT: LOW CONCERN**
 - 52 / 30 / 4 are hardcoded inputs (`stock_stage2_trend_weekly.pine:58-60`)
@@ -123,15 +123,16 @@ yfinance for the scanner/replications) and **REAL-but-results-not-committed**
 ### Reproducible-from-repo vs. asserted-only (decisive for the resume)
 | Reported number | Status |
 |---|---|
-| PF 3.53 / 3.78 (39-name universes) | **Committed** — `results/backtests/*_pooled.csv` + `*_audit.txt`; regenerable (drifts with Yahoo); survivorship-biased |
+| PF 3.53 / 3.77 (39-name universes) | **Committed** — `results/backtests/*_pooled.csv` + `*_audit.txt`; reproduces byte-for-byte from the pinned `data_cache/` (verified); survivorship-biased; OOS trips concentrated/decaying-edge fragility warnings |
 | PF 6.29 (Nifty 500), 2.44 (US) | Same — real script (`replicate_stage2_universe.py`), **no committed output** |
 | 23.8% CAGR / 23% maxDD (portfolio) | **Committed** — `results/backtests/stage2_portfolio_snapshot.txt` (2026-07-09 run: 23.9%/23.6% modern; 25.3% full) |
 | Eval two-pass (committed: P 0.87 / R 0.71) | **Committed** — `fallacy-auditor/results/eval_report_snapshot.json`; regenerable with Ollama (`pytest -m eval -s`), runs vary a few points |
-| 44 examples, 79 tests, 5 fallacies | **Fully committed and verifiable** in the repo right now |
+| 44 examples, 83 tests, 5 fallacies | **Fully committed and verifiable** in the repo right now |
 
-**Bottom line:** the *methodology and code* are reproducible and real; the
-*performance figures* are not committed artifacts, drift with live data, and
-carry survivorship bias. Put the engineering on the resume, and phrase any
+**Bottom line:** the *methodology and code* are reproducible and real, and the
+headline *performance figures* are now committed artifacts that reproduce from
+a pinned snapshot — but they still carry survivorship bias and have no
+forward/live track record. Put the engineering on the resume, and phrase any
 number as "in backtests I ran," never as a track record.
 
 ---
@@ -144,11 +145,11 @@ number as "in backtests I ran," never as a track record.
 | Language | Python ≥3.11 | `fallacy-auditor/pyproject.toml:10` |
 | Core deps (auditor) | `pydantic>=2.5` only; stdlib `urllib` for HTTP | `pyproject.toml:15-17`; `llm.py:30-31` |
 | Optional deps | `anthropic>=0.40` (paid engines), `pytest>=8` (dev) | `pyproject.toml:19-21` |
-| Tooling deps | `pandas`, `yfinance` (scanner/research) | `tools/stage2_scan.py:34-35` |
+| Tooling deps | `pandas`, `numpy`, `yfinance`, `pyarrow` (reads the pinned parquet) — declared in root `requirements.txt` | `tools/stage2_scan.py:34-35`; `requirements.txt` |
 | Local LLM | Ollama, default model **`qwen2.5:7b`**, `/api/chat`, temp 0, schema-constrained | `llm.py:46,134-159` |
 | Data source | Yahoo Finance via `yfinance` (`auto_adjust=True`) | `tools/stage2_scan.py:64`; `tools/research/*.py` |
 | Fundamentals | Yahoo `yf.Ticker().info` (trailingPE, ROE) | `tools/value_screen.py:45-49` |
-| Tests / CI | pytest (79 tests) + GitHub Actions (py 3.11/3.12) | `.github/workflows/fallacy-auditor-ci.yml`; `fallacy-auditor/.github/workflows/ci.yml` |
+| Tests / CI | pytest (82 offline, 83 total) + GitHub Actions (py 3.11/3.12) | `.github/workflows/fallacy-auditor-ci.yml`; `fallacy-auditor/.github/workflows/ci.yml` |
 | Index lists | Official NSE constituent CSV fetch | `tools/fetch_nifty500.py:11-16` |
 
 ---
@@ -197,17 +198,18 @@ defensible engineering claim in the repo.
 |---|---|---|
 | Fallacy types detected | **5** | `schemas.py` enum (survivorship, lookahead, overfitting, base-rate, unfalsifiable) |
 | Hand-labeled eval examples | **44** (38 labels, 10 clean) | `data/labeled_examples.jsonl` (line count) |
-| Automated tests | **79** | `pytest --collect-only` |
-| Python package modules | 12 | `src/fallacy_auditor/*.py` |
+| Automated tests | **83** (82 offline + 1 opt-in eval) | `pytest --collect-only` |
+| Python package modules | 13 | `src/fallacy_auditor/*.py` |
 | Pine linter rules | **5** | `pinelint.py:15-28` |
-| Pine strategy/indicator files | 23 `.pine` files | `src/*.pine` |
+| Pine strategy/indicator files | 22 `.pine` files (+1 `.c` archive) | `src/*.pine` |
 | Weekly-strategy universe (default watchlist) | ~160 names | `tools/stage2_scan.py:37-55` |
 | Nifty-500 watchlist (committed) | 500 symbols | `tools/watchlist_nifty500.txt` |
 | CI matrix | Python 3.11 & 3.12 | CI yml |
 | License | MIT | `fallacy-auditor/LICENSE`, `pyproject.toml:11` |
 
 *(Performance numbers — PF, CAGR, P/R — are deliberately NOT in this table;
-they belong in §3 as reproducible-but-not-committed.)*
+they belong in §3, where they are now committed and reproducible but stay
+survivorship-caveated and forward-untested.)*
 
 ---
 
@@ -255,8 +257,10 @@ they belong in §3 as reproducible-but-not-committed.)*
 - The GitHub PAT is **not** in the repo (it lives in `~/.git-credentials`,
   outside version control). **Still rotate it** — it was pasted into a chat.
 - No result artifacts leak personal data: `journal.csv`, `breadth_log.csv`,
-  `eval_report.json`, `data_cache/` are all gitignored (root `.gitignore` +
-  `fallacy-auditor/.gitignore`).
+  and the live `eval_report.json` are gitignored (root `.gitignore` +
+  `fallacy-auditor/.gitignore`). `data_cache/` is deliberately **committed**
+  (pinned public price data, no personal data) so the backtests reproduce —
+  the root `.gitignore` calls this out explicitly.
 - One nit: `.gitignore` references `files.zip`, `git_*.deb`, `.localgit/` —
   local tooling detritus; fine, just confirm none is committed (they aren't).
 
@@ -275,7 +279,8 @@ they belong in §3 as reproducible-but-not-committed.)*
 - Wrote a **44-example hand-labeled evaluation set** and a precision/recall
   harness that scores the auditor and logs regressions. `data/labeled_examples
   .jsonl`, `tests/test_eval.py`.
-- Shipped **79 automated tests** and **GitHub Actions CI** (Python 3.11/3.12).
+- Shipped **83 automated tests** (82 run in CI; 1 opt-in live eval) and
+  **GitHub Actions CI** (Python 3.11/3.12).
 - Built a deterministic **Pine Script linter** (5 mechanical-bias rules) and a
   **profit-factor fragility auditor** (bootstrap 95% CI, luck-concentration and
   time-stability checks) in the standard library. `pinelint.py`, `profit.py`.
@@ -289,13 +294,16 @@ they belong in §3 as reproducible-but-not-committed.)*
   pre-registered criteria** (documented). `tools/research/*.py`.
 
 ### 9b. DO-NOT-CLAIM (asserted, biased, or drifty)
-- ❌ "Achieved a profit factor of 6.29 / 3.53 / etc." — survivorship-biased,
-  not committed, drifts with live data. Say "measured in backtests I ran,"
-  never as a result the repo proves.
+- ❌ "Achieved a profit factor of 6.29 / 3.53 / etc." as a *track record* —
+  these are survivorship-biased backtests with no forward/live results. (The
+  39-name PFs are committed and reproduce from the pinned cache; the Nifty-500
+  6.29 is still uncommitted.) Say "measured in backtests I ran," never as a
+  result that predicts live performance.
 - ❌ "23.8% CAGR strategy" as a performance credential — same reasons; and it's
   a backtest with no forward/live track record.
-- ❌ "Auditor achieves 0.88 precision" as a hard number — the eval report isn't
-  committed; only claim the *harness exists* unless you commit a report.
+- ❌ "Auditor achieves 0.88 precision" as a hard number — the committed
+  snapshot is **P 0.87 / R 0.71** (two-pass, 44 examples) and local-LLM runs
+  vary a few points; cite the committed snapshot, not 0.88.
 - ❌ Any phrasing implying live/real-money results — the system is at the
   paper-trading gate; nothing has traded.
 - ❌ "Validated" strategy in a strong sense — it passed *backtest* bars, not a
@@ -305,7 +313,7 @@ they belong in §3 as reproducible-but-not-committed.)*
 - **Engineered** an MIT-licensed Python fallacy-auditing package that flags 5
   reasoning fallacies in LLM-generated trading text via a local Ollama model,
   with a novel *grounding gate* (verbatim-substring verification) that
-  structurally eliminates hallucinated findings; 79 tests + CI. **[DEFENSIBLE]**
+  structurally eliminates hallucinated findings; 83 tests + CI. **[DEFENSIBLE]**
 - **Built** a 44-example labeled eval set and a precision/recall harness with a
   two-pass LLM verifier, driving prompt/model iteration measured on gold
   labels. **[DEFENSIBLE]**
@@ -315,8 +323,9 @@ they belong in §3 as reproducible-but-not-committed.)*
   universes — used to reject 7 strategies against pre-registered bars.
   **[DEFENSIBLE]** *(keep it about the harness + discipline, not the PF value)*
 - **Measured** two-pass auditor precision/recall on a local 7B model
-  (qwen2.5:7b). **[VERIFY — commit an `eval_report.json` first, then cite the
-  number]**
+  (qwen2.5:7b): **P 0.87 / R 0.71**, committed at
+  `fallacy-auditor/results/eval_report_snapshot.json`. **[DEFENSIBLE —
+  committed; it is a 44-example set and live runs vary a few points]**
 
 ---
 
@@ -327,14 +336,17 @@ they belong in §3 as reproducible-but-not-committed.)*
    especially for a trend system; that's why you lead with breadth and a
    stripped ~15-16% floor, and why the real test is forward paper-trading. Be
    ready to quantify direction even if you can't fully correct it.
-2. **"Show me the number. Where in the repo is PF 6.29 / the 0.88 eval?"** They
-   aren't committed. Prepare to either (a) run the script live in the
-   interview, or (b) commit the result artifacts beforehand. Right now this is
-   your weakest spot — fix it by committing one eval report and one pooled
-   result CSV with a README pointer.
+2. **"Show me the number. Where in the repo is PF 6.29 / the 0.88 eval?"** The
+   39-name PFs and the eval snapshot are **now committed** —
+   `results/backtests/*_pooled.csv` + `*_audit.txt`,
+   `fallacy-auditor/results/eval_report_snapshot.json` (P 0.87 / R 0.71), with
+   `results/README.md` pointers — and the backtests reproduce from the pinned
+   `data_cache/`. Still be ready to run it live; the wider Nifty-500 6.29 / US
+   2.44 figures remain uncommitted.
 3. **"Your Pine tester uses 0.2% costs but your Python uses 0.25% — which is
-   the result, and why two?"** Reconcile the two cost models or state which
-   engine produced which number.
+   the result, and why two?"** Already reconciled: both now use 0.25%/side, and
+   the Pine adds ~5 ticks slippage as extra conservatism
+   (`stock_stage2_trend_weekly.pine:52-54`, `replicate_stage2.py:30`).
 4. **"A weekly-close signal — how do you avoid acting on a forming bar live,
    and did the backtest ever do so?"** Backtest is clean (confirmed closes);
    the discipline is code-enforced in the scanner (`:84`) but human-enforced in
@@ -346,6 +358,8 @@ they belong in §3 as reproducible-but-not-committed.)*
    discipline and the 7 documented rejections as evidence of a non-overfitting
    process.
 
-*Priority fixes before interviewing: commit one `eval_report.json` and one
-pooled result CSV (turns §3 numbers from asserted → verifiable); reconcile the
-0.2%/0.25% cost split; delete the dead `simulate()`; rotate the PAT.*
+*Priority fixes: **mostly done** — the eval snapshot and pooled result CSVs are
+committed (§3 now verifiable), the 0.2%/0.25% cost split is reconciled, and the
+dead `simulate()` is deleted (see the FIXES banner in §7). Still outstanding:
+**rotate the PAT** (it was pasted into a chat), and commit the wider
+Nifty-500 / US outputs if you want to cite 6.29 / 2.44.*

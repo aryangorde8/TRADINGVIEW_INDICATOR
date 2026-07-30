@@ -69,7 +69,7 @@ single trades of +742% to +1,086% in the midcap tests).
 
 | Test | Result |
 |---|---|
-| 39 NSE large caps, 2 universes | pooled PF 3.53 / 3.78 — passed its pre-registered bar |
+| 39 NSE large caps, 2 universes | pooled PF 3.53 / 3.77 — passed its pre-registered bar |
 | Full Nifty 500 (441 names, 5,048 trades) | pooled PF 6.29 (upper bound), **breadth 87% of names profitable** |
 | 64 US large caps incl. 9 famous duds | PF 2.44 (CI 1.97-3.06), **98% breadth** — the edge travels |
 | Portfolio (10 slots, 39 names) | committed snapshot (2026-07-09): full 25.3% CAGR (₹10L→₹96cr/29y); modern 23.9% at 23.6% maxDD — `results/backtests/stage2_portfolio_snapshot.txt` |
@@ -128,11 +128,17 @@ cd ~/TRADINGVIEW_INDICATOR
 ## 2.1 One-time setup / recovery (after a reinstall only)
 
 ```bash
-pip install --user --break-system-packages pydantic pytest yfinance
+pip install --user --break-system-packages -r requirements.txt   # pandas, numpy, yfinance, pyarrow
+pip install --user --break-system-packages pytest                # fallacy-auditor test runner
 ```
-Installs the three Python libraries everything depends on. `--user` keeps
-them in your home folder; `--break-system-packages` is Ubuntu's required
-override for user-level installs (safe — touches nothing system-owned).
+The first line installs the trading tools' libraries (`requirements.txt` at
+the repo root) — including **pyarrow**, which is required to read the pinned
+`data_cache/*.parquet` snapshot; without it the replication scripts cannot
+reproduce the committed figures. The second adds pytest for the auditor's
+suite (pydantic itself is pulled in by the editable install below). `--user`
+keeps them in your home folder; `--break-system-packages` is Ubuntu's
+required override for user-level installs (safe — touches nothing
+system-owned).
 
 ```bash
 pip install --user --break-system-packages -e ./fallacy-auditor
@@ -336,9 +342,9 @@ python3 value_screen.py                # the quarterly value screen
 
 ```bash
 cd ~/TRADINGVIEW_INDICATOR/fallacy-auditor
-python3 -m pytest -q                              # 79 offline tests, ~5s
+python3 -m pytest -q                              # 82 offline tests, ~5s (83rd is the opt-in eval)
 pytest -m eval -s                                  # live accuracy eval on the local model
-FALLACY_AUDITOR_EVAL_VERIFY=1 pytest -m eval -s    # two-pass eval (baseline P .88 / R .74)
+FALLACY_AUDITOR_EVAL_VERIFY=1 pytest -m eval -s    # two-pass eval (committed snapshot P .87 / R .71; live runs vary)
 python3 scripts/redteam.py --fallacy all --n 2     # generate hard eval candidates
 python3 scripts/validate_dataset.py data/labeled_examples.jsonl   # dataset integrity
 ```
@@ -362,7 +368,7 @@ the private repo `github.com/aryangorde8/TRADINGVIEW_INDICATOR`; the PAT is
 stored in `~/.git-credentials` (rotate it on GitHub if ever concerned —
 one-line swap in that file). Journal and breadth logs are gitignored
 (trading records stay local). Every push touching `fallacy-auditor/` runs
-its 79-test suite automatically via GitHub Actions.
+its 82-test offline suite automatically via GitHub Actions.
 
 ## 2.11 Ollama service management
 

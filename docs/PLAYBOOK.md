@@ -12,7 +12,8 @@ cd ~/TRADINGVIEW_INDICATOR
 ## 0. One-time setup (already done on this machine — re-run only after a reinstall)
 
 ```bash
-pip install --user --break-system-packages pydantic pytest yfinance
+pip install --user --break-system-packages -r requirements.txt   # pandas, numpy, yfinance, pyarrow (reads the pinned parquet cache)
+pip install --user --break-system-packages pytest                # fallacy-auditor test runner
 pip install --user --break-system-packages -e ./fallacy-auditor
 systemctl --user enable --now ollama          # local LLM server autostart
 ~/.local/bin/ollama pull qwen2.5:7b           # audit model (winner of the bake-off)
@@ -135,7 +136,7 @@ All in `src/`, all long-only NSE cash equity, all lint-clean:
 
 | File | Chart timeframe | Status | What it is |
 |---|---|---|---|
-| `stock_stage2_trend_weekly.pine` | **1W** | **CHAMPION** — passed its pre-registered bar (pooled PF 3.53 / 3.78 both universes) | Weinstein Stage-2 trend rider; holds winners for months-years; the core engine and the monster-catcher |
+| `stock_stage2_trend_weekly.pine` | **1W** | **CHAMPION** — passed its pre-registered bar (pooled PF 3.53 / 3.77 both universes) | Weinstein Stage-2 trend rider; holds winners for months-years; the core engine and the monster-catcher |
 | `stock_swing_ribbon_pullback.pine` | 1D | validated earlier (11/15 names; replication OOS PF 1.39) | Buys pullbacks to EMA20 inside an uptrend; fixed 2R |
 | `stock_swing_dual_edge.pine` | 1D | assembled from tested parts | Ribbon pullback + 52wk breakout in one script (they share only 11% of trades) |
 | `stock_swing_52wk_breakout.pine` | 1D | real edge, missed its PF≥1.5 bar (OOS 1.41) | Kept as research; superseded by the weekly Stage-2 version |
@@ -227,9 +228,9 @@ python3 replicate_stage2.py
 
 ```bash
 cd ~/TRADINGVIEW_INDICATOR/fallacy-auditor
-python3 -m pytest -q                                  # 79 offline tests
+python3 -m pytest -q                                  # 82 offline tests
 pytest -m eval -s                                      # live accuracy eval on local model
-FALLACY_AUDITOR_EVAL_VERIFY=1 pytest -m eval -s        # two-pass eval (P .88 / R .74 baseline)
+FALLACY_AUDITOR_EVAL_VERIFY=1 pytest -m eval -s        # two-pass eval (committed snapshot P .87 / R .71; live runs vary)
 python3 scripts/redteam.py --fallacy all --n 2         # generate hard eval candidates (review before promoting)
 python3 scripts/validate_dataset.py data/labeled_examples.jsonl
 ```

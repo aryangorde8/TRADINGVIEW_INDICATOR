@@ -1,0 +1,14 @@
+# Runtime dependencies for the trading tools (tools/ and tools/research/):
+# the Stage-2 scanner, the historical replication scripts, the portfolio
+# simulators, the value screen, and the trade journal.
+#
+# Install with:  pip install -r requirements.txt
+#
+# The fallacy-auditor ships its own dependency set — install it separately:
+#   pip install -e ./fallacy-auditor          # runtime (pydantic)
+#   pip install -e "./fallacy-auditor[dev]"   # + pytest, to run its tests
+
+pandas>=2.0     # weekly (W-FRI) resampling and the trade dataframes
+numpy>=1.24     # numerics behind the replication + profit-factor math
+yfinance>=0.2   # live price + fundamentals fetch (scanner, pin_data)
+pyarrow>=14     # REQUIRED to read the pinned data_cache/*.parquet snapshot
