@@ -15,8 +15,8 @@ Money flows through four layers, in this order — never skip a layer:
 
 | Layer | What | Why |
 |---|---|---|
-| **0. Emergency fund** | 6 months of expenses in an FD, untouchable | So no life event ever forces selling mid-drawdown — the one failure no backtest can price |
-| **1. Core (buy & hold)** | Monthly SIP into Nifty 50 + Nifty Next 50 index funds | The no-skill compounding floor (~12-13% historical); Next 50 is the nursery of future giants (~2-3% more, deeper drawdowns) |
+| **0. Emergency reserve** | ~6 months of expenses in a fixed deposit, untouchable | So no life event ever forces selling mid-drawdown — the one failure no backtest can price |
+| **1. Core (buy & hold)** | Recurring contributions into Nifty 50 + Nifty Next 50 index funds | The no-skill compounding floor (~12-13% historical); Next 50 is the nursery of future giants (~2-3% more, deeper drawdowns) |
 | **2. Satellite (the edge)** | The Stage-2 weekly trend system across the Nifty 500 | The measured edge: floor ~15-16% CAGR, ceiling ~24% in moonshot decades |
 | **3. Strategy cash** | Idle satellite capital in liquid/overnight funds (~6-6.5%, T+1) | Dry powder for recovery breakouts; adds ~1.5-2.5%/yr vs idle cash |
 
@@ -76,19 +76,23 @@ single trades of +742% to +1,086% in the midcap tests).
 | Ex-moonshot floor (honest planning number) | **~15-16% CAGR, maxDD ~25-35%, 3-4 losing years per decade** |
 | Holding periods | winners median 266d (29% >1yr → LTCG), losers median 84d |
 
-**Wealth math (₹10L start + monthly SIP, 30 years):**
+**Wealth math (normalised — multiples, not amounts):**
 
-| Plan | Nominal 2056 | In today's rupees (÷~5 for 5.5% inflation) |
+For a monthly contribution stream that itself grows 10-12%/yr, compounded
+over 30 years:
+
+| Return assumption | Nominal terminal corpus | In today's purchasing power |
 |---|---|---|
-| ₹20k/mo +10%/yr @ 15% | ~₹30 cr | ~₹6 cr |
-| ₹30k/mo +12%/yr @ 16% | ~₹59 cr | ~₹12 cr |
-| ₹40k/mo +12%/yr @ 18% | ~₹105 cr | ~₹21 cr |
+| 15% CAGR, contributions +10%/yr | ~1,500x the *initial monthly* contribution | ÷~5 at 5.5% inflation |
+| 16% CAGR, contributions +12%/yr | ~2,000x | ÷~5 |
+| 18% CAGR, contributions +12%/yr | ~2,600x | ÷~5 |
 
-The ₹100cr nominal goal is reachable with a growing SIP at the honest floor;
-₹100cr in TODAY'S purchasing power (~₹500cr nominal) is an income question
-(contributions reaching lakhs/month), not a stock-picking question. The
-biggest lever after year 1 is income growth; the biggest risk is quitting
-during a drawdown year.
+The structural conclusion is what matters, and it is independent of the
+starting amount: **the binding constraint is contribution growth, not
+portfolio return.** Inflation divides the nominal outcome by roughly five
+over 30 years, so any "target corpus" stated in today's rupees is an income
+question, not a stock-picking question. The biggest lever after year 1 is
+contribution growth; the biggest risk is quitting during a drawdown year.
 
 ## 1.6 The rejection log (equal in value to the champion)
 
@@ -363,12 +367,11 @@ Environment knobs: `FALLACY_AUDITOR_OLLAMA_MODEL` (default qwen2.5:7b),
 ~/.gitportable/git commit -m "your message"
 ~/.gitportable/git push
 ```
-This machine uses the portable git at `~/.gitportable/git`. The remote is
-the private repo `github.com/aryangorde8/TRADINGVIEW_INDICATOR`; the PAT is
-stored in `~/.git-credentials` (rotate it on GitHub if ever concerned —
-one-line swap in that file). Journal and breadth logs are gitignored
-(trading records stay local). Every push touching `fallacy-auditor/` runs
-its 82-test offline suite automatically via GitHub Actions.
+This machine uses the portable git at `~/.gitportable/git`. Credentials are
+kept outside the repository in the local git credential store — never commit
+a token. Journal and breadth logs are gitignored (personal trading records
+stay local and are never published). Every push touching `fallacy-auditor/`
+runs its 82-test offline suite automatically via GitHub Actions.
 
 ## 2.11 Ollama service management
 
@@ -401,7 +404,7 @@ systemctl --user restart ollama         # restart it
 2. Equal ~10% slots, max ~10 names, max 3 per sector, full Nifty-500 net.
 3. Cash is a position; it lives in liquid funds, never in credit lockups.
 4. No F&O, no leverage, no margin funding, no tips — all measured, all closed.
-5. The SIP flows every month, especially in drawdowns.
+5. Contributions continue on schedule, especially in drawdowns.
 6. Every new idea: thesis audit → pine lint → pre-registered bar →
    replication → forward test. Failed = recorded and closed, never tuned.
 7. The journal gets audited monthly; the system gets judged on 20+ trades,

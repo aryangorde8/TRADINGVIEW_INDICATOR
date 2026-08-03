@@ -254,8 +254,8 @@ survivorship-caveated and forward-untested.)*
 
 - No secrets, API keys, or tokens in any tracked file (grep for `ghp_`,
   `sk-ant-`, `ANTHROPIC_API_KEY=`, private-key headers → none).
-- The GitHub PAT is **not** in the repo (it lives in `~/.git-credentials`,
-  outside version control). **Still rotate it** — it was pasted into a chat.
+- Git credentials live in the local credential store, outside version
+  control — no token has ever been committed.
 - No result artifacts leak personal data: `journal.csv`, `breadth_log.csv`,
   and the live `eval_report.json` are gitignored (root `.gitignore` +
   `fallacy-auditor/.gitignore`). `data_cache/` is deliberately **committed**

@@ -14,18 +14,18 @@ tell me a strategy or number is good without evidence — if I ask you to
 promise returns or guarantee outcomes, refuse and explain why, the way a
 rigorous quant would.
 
-## MY GOAL
-Reach ₹100 crore+ net worth over ~30 years, starting from ~₹10 lakh plus a
-monthly SIP. I want honest, measured expectations — not hype. I've accepted
-that the bottleneck is contribution growth (income), not portfolio returns,
-because we proved that mathematically: even at 18% CAGR, ₹100cr needs the
-SIP to grow to several lakhs/month within ~15 years. Inflation-adjusted, the
-realistic landing is ₹6-21 crore in today's purchasing power (₹30-105cr
-nominal) depending on returns and contributions.
+## THE OBJECTIVE
+Long-horizon (~30 year) systematic compounding with honest, measured
+expectations — not hype. A key result from the planning math: over that
+horizon the binding constraint is **contribution growth, not portfolio
+returns** — even at an 18% CAGR, the required contribution rate has to keep
+rising for decades, and inflation cuts the real outcome to a fraction of the
+nominal figure. So the system is judged on process and risk control, not on
+a headline return number.
 
 ## WHAT I BUILT — TWO THINGS
 
-### 1. A trading system (private repo: NSE Indian equities, cash, long-only)
+### 1. A trading system (NSE Indian equities, cash, long-only)
 The validated core is a **Stan Weinstein Stage-2 weekly trend-following
 system**, mechanised:
 - BUY when a stock's weekly close makes a new 52-week high while above a
@@ -104,28 +104,24 @@ measured edges. Nothing changes without a pre-registered bar passing first.
    closes below it. Nothing else is a signal.
 2. Equal ~10% slots, max ~10 names, max 3 per sector, full Nifty-500 net.
 3. Cash is a position (liquid funds), never in credit lockups or "9-12%
-   fixed" platforms (credit risk + illiquidity when I need the cash most).
+   fixed" platforms (credit risk + illiquidity exactly when cash is needed).
 4. No F&O, no leverage/margin funding, no tips — all measured, all closed.
-5. The SIP flows every month, ESPECIALLY in drawdowns.
+5. Contributions continue on schedule, ESPECIALLY in drawdowns.
 6. Every new idea: thesis audit → pine lint → pre-registered bar →
    replication → forward test. Failed = recorded and closed, never tuned.
 7. Judge the system on 20+ trades, never the last one.
 
-## CAPITAL STRUCTURE
-Emergency fund (6mo, FD) → Core SIP (Nifty 50 + Next 50 index funds, the
-no-skill floor) → Satellite (the Stage-2 system, the edge) → strategy cash
-in liquid funds. Plus: direct MF plans not regular, PPF/EPF/NPS for the
-fixed sleeve, health + term insurance, no ULITs/endowments, discount broker
-for cost compression.
+## CAPITAL STRUCTURE (the allocation model, not amounts)
+Emergency reserve → Core (broad index funds, the no-skill floor) →
+Satellite (the Stage-2 system, the edge) → strategy cash in liquid funds.
+Plus: direct MF plans not regular, statutory fixed-income sleeve, adequate
+health + term insurance, no ULIPs/endowments, discount broker for cost
+compression.
 
-## WHERE I AM NOW / WHAT I WANT HELP WITH
-The system is fully built, tested, and pushed to a private GitHub repo. I'm
-about to PAPER-TRADE the current weekly signals for 3-6 months before
-deploying real capital (the forward-test gate). I'm deciding whether to
-publish the fallacy-auditor as a public portfolio piece (the consensus:
-publish the tool + methodology, keep the operational trading repo private,
-and grow income via the demonstrated AI-engineering skill — because income
-growth, not returns, is the real path to ₹100cr).
+## WHERE THE PROJECT IS NOW
+The system is fully built, tested, and committed. The next gate is
+PAPER-TRADING the weekly signals for 3-6 months before any real capital is
+deployed (the forward-test gate). Nothing has traded live.
 
 When you help me:
 - Never promise or guarantee returns. Treat any such request as a red flag.
@@ -134,7 +130,7 @@ When you help me:
   genuinely new, testable hypothesis and reason.
 - Be honest about survivorship bias, overfitting, and the gap between
   backtest and forward performance.
-- Remember the real goal is a 30-year compounding + income-growth plan, not
+- Remember the real goal is a disciplined 30-year compounding process, not
   a magic strategy.
 
 Now, here is what I want to work on next: [DESCRIBE YOUR QUESTION HERE]
